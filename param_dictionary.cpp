@@ -62,13 +62,15 @@ void ParamDictionary::initializeDictionary()
     // 滤波器
     m_dictionary.append({0x6091, 0x00, OD_TYPE_FLOAT, "速度滤波器", "", 0.0f, 1.0f, 0.1f, true, true, 2, "滤波器"});
     m_dictionary.append({0x6092, 0x00, OD_TYPE_FLOAT, "角度滤波器", "", 0.0f, 1.0f, 0.1f, true, true, 2, "滤波器"});
-    m_dictionary.append({0x6093, 0x00, OD_TYPE_FLOAT, "Q轴电流滤波器", "", 0.0f, 1.0f, 0.1f, true, true, 2, "滤波器"});
-    m_dictionary.append({0x6094, 0x00, OD_TYPE_FLOAT, "D轴电流滤波器", "", 0.0f, 1.0f, 0.1f, true, true, 2, "滤波器"});
+    m_dictionary.append({0x6093, 0x00, OD_TYPE_FLOAT, "Q轴电流滤波系数", "", 0.0f, 1.0f, 0.1f, true, true, 2, "滤波器"});
+    m_dictionary.append({0x6094, 0x00, OD_TYPE_FLOAT, "D轴电流滤波系数", "", 0.0f, 1.0f, 0.1f, true, true, 2, "滤波器"});
+    m_dictionary.append({0x6095, 0x00, OD_TYPE_FLOAT, "B相电流滤波系数", "", 0.0f, 1.0f, 0.1f, true, true, 2, "滤波器"});
+    m_dictionary.append({0x6096, 0x00, OD_TYPE_FLOAT, "C相电流滤波系数", "", 0.0f, 1.0f, 0.1f, true, true, 2, "滤波器"});
 
     // 编码器
     m_dictionary.append({0x60B1, 0x00, OD_TYPE_INT16, "编码器线数", "", 1, 65535, 4096, true, true, 2, "编码器"});
     m_dictionary.append({0x60B2, 0x00, OD_TYPE_INT16, "编码器方向", "", -1, 1, 1, true, true, 2, "编码器"});
-    m_dictionary.append({0x60B3, 0x00, OD_TYPE_FLOAT, "角度偏移", "rad", -6.28f, 6.28f, 0.0f, true, true, 2, "编码器"});
+    m_dictionary.append({0x60B3, 0x00, OD_TYPE_FLOAT, "角度偏移", "rad", -360.0f, 360.0f, 220.0f, true, true, 2, "编码器"});
 
     // 电机参数
     m_dictionary.append({0x60D1, 0x00, OD_TYPE_INT16, "电机极对数", "", 1, 100, 7, true, true, 2, "电机参数"});

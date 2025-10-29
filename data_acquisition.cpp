@@ -60,6 +60,14 @@ OscilloscopeWidget::OscilloscopeWidget(QWidget *parent)
     , m_frequencyLabel(nullptr)
     , m_maxTimeWindow(60.0)  // 60秒时间窗口
     , m_currentTimeOffset(0.0)
+    , m_isSelecting(false)
+    , m_selectionStart(0, 0)
+    , m_selectionEnd(0, 0)
+    , m_selectionRect(nullptr)
+    , m_selectionH1(nullptr)
+    , m_selectionH2(nullptr)
+    , m_selectionV1(nullptr)
+    , m_selectionV2(nullptr)
 {
     qDebug() << "【示波器】开始创建OscilloscopeWidget";
     
@@ -155,6 +163,39 @@ void OscilloscopeWidget::setupPlot()
     // 初始时隐藏十字线
     m_crosshairH->setVisible(false);
     m_crosshairV->setVisible(false);
+    
+    // 创建框选相关图形项
+    m_selectionRect = new QGraphicsRectItem();
+    m_selectionRect->setPen(QPen(QColor(255, 255, 0, 150), 2, Qt::DashLine));
+    m_selectionRect->setBrush(QBrush(QColor(255, 255, 0, 30)));
+    m_selectionRect->setZValue(998);
+    m_selectionRect->setVisible(false);
+    m_scene->addItem(m_selectionRect);
+    
+    // 创建框选边界线
+    m_selectionH1 = new QGraphicsLineItem();
+    m_selectionH1->setPen(QPen(QColor(255, 255, 0, 200), 1, Qt::DashLine));
+    m_selectionH1->setZValue(998);
+    m_selectionH1->setVisible(false);
+    m_scene->addItem(m_selectionH1);
+    
+    m_selectionH2 = new QGraphicsLineItem();
+    m_selectionH2->setPen(QPen(QColor(255, 255, 0, 200), 1, Qt::DashLine));
+    m_selectionH2->setZValue(998);
+    m_selectionH2->setVisible(false);
+    m_scene->addItem(m_selectionH2);
+    
+    m_selectionV1 = new QGraphicsLineItem();
+    m_selectionV1->setPen(QPen(QColor(255, 255, 0, 200), 1, Qt::DashLine));
+    m_selectionV1->setZValue(998);
+    m_selectionV1->setVisible(false);
+    m_scene->addItem(m_selectionV1);
+    
+    m_selectionV2 = new QGraphicsLineItem();
+    m_selectionV2->setPen(QPen(QColor(255, 255, 0, 200), 1, Qt::DashLine));
+    m_selectionV2->setZValue(998);
+    m_selectionV2->setVisible(false);
+    m_scene->addItem(m_selectionV2);
     
     qDebug() << "【示波器】鼠标位置显示组件创建完成";
 }
@@ -259,22 +300,25 @@ void OscilloscopeWidget::addDataPoint(const QString &channelName, double timesta
     }
     
     // 更新显示范围 - 60秒滚动显示
+    // 计算目标时间范围（跟随最新数据）
+    double currentMaxTime = dataTime;
+    double targetMinTime = qMax(0.0, currentMaxTime - m_maxTimeWindow);
+    
+    // 实时滚动：时间窗口跟随最新数据，保持波形相对静止
+    // 直接设置时间偏移为目标值，实现实时跟随
+    m_timeOffset = targetMinTime;
+    
+    // 更新时间范围
+    m_timeRange = m_maxTimeWindow;
+    
+    // 更新数值范围（只有在自动缩放模式下才自动更新）
     if (m_autoScale) {
-        // 计算当前显示的时间范围（跟随最新数据）
-        double currentMaxTime = dataTime;
-        double currentMinTime = qMax(0.0, currentMaxTime - m_maxTimeWindow);
-        
-        // 更新时间范围和时间偏移
-        m_timeRange = m_maxTimeWindow;
-        m_timeOffset = currentMinTime;
-        
-        // 更新数值范围
         updateValueRange();
-        
-        // 重新绘制
-        drawGrid();
-        drawCurves();
     }
+    
+    // 重新绘制
+    drawGrid();
+    drawCurves();
     
     // 重新绘制 - 添加频率限制避免内存溢出
     static QTime lastDrawTime = QTime::currentTime();
@@ -287,11 +331,22 @@ void OscilloscopeWidget::addDataPoint(const QString &channelName, double timesta
 
 QColor OscilloscopeWidget::getCurveColor(const QString &channelName)
 {
+    // 检查是否是通道1（绿色）
+    if (channelName.startsWith("CH1_")) {
+        return QColor(0, 255, 0);  // 绿色
+    }
+    
+    // 检查是否是通道2（蓝色）
+    if (channelName.startsWith("CH2_")) {
+        return QColor(0, 100, 255);  // 蓝色
+    }
+    
+    // 如果已经定义了颜色，使用定义的颜色
     if (m_curveColors.contains(channelName)) {
         return m_curveColors[channelName];
     }
     
-    // 默认颜色
+    // 默认颜色（红色）
     return QColor(255, 100, 100);
 }
 
@@ -302,8 +357,9 @@ QPointF OscilloscopeWidget::dataToScreen(double timestamp, double value)
     double height = sceneRect.height();
     
     // 计算X坐标（时间轴）
-    // timestamp已经是相对时间，直接使用
-    double timeRatio = timestamp / m_timeRange;
+    // 使用时间偏移来计算相对位置
+    double relativeTime = timestamp - m_timeOffset;
+    double timeRatio = relativeTime / m_timeRange;
     timeRatio = qBound(0.0, timeRatio, 1.0);
     
     double x = 50 + timeRatio * (width - 100); // 留出边距
@@ -387,6 +443,36 @@ QPointF OscilloscopeWidget::findValueAtTime(double timestamp)
     return result;
 }
 
+QMap<QString, double> OscilloscopeWidget::findAllValuesAtTime(double timestamp)
+{
+    QMap<QString, double> result;
+    
+    // 遍历所有数据缓冲区，找到每个通道最接近时间戳的数据点
+    for (auto it = m_dataBuffers.begin(); it != m_dataBuffers.end(); ++it) {
+        const QString &channelName = it.key();
+        const QVector<QPointF> &data = it.value();
+        
+        double minTimeDiff = std::numeric_limits<double>::max();
+        double closestValue = 0.0;
+        bool found = false;
+        
+        for (int i = 0; i < data.size(); ++i) {
+            double timeDiff = qAbs(data[i].x() - timestamp);
+            if (timeDiff < minTimeDiff) {
+                minTimeDiff = timeDiff;
+                closestValue = data[i].y();
+                found = true;
+            }
+        }
+        
+        if (found) {
+            result[channelName] = closestValue;
+        }
+    }
+    
+    return result;
+}
+
 void OscilloscopeWidget::updateMousePosition(const QPointF &mousePos)
 {
     if (!m_mousePositionLabel || !m_crosshairH || !m_crosshairV) {
@@ -396,21 +482,60 @@ void OscilloscopeWidget::updateMousePosition(const QPointF &mousePos)
     QRectF sceneRect = m_scene->sceneRect();
     QPointF dataPoint = screenToData(mousePos);
     
-    // 查找对应时间点的实际波形数值
-    QPointF waveformValue = findValueAtTime(dataPoint.x());
+    // 查找所有通道在对应时间点的波形数值
+    QMap<QString, double> allValues = findAllValuesAtTime(dataPoint.x());
     
-    // 将波形数值转换为屏幕坐标
-    QPointF waveformScreenPos = dataToScreen(dataPoint.x(), waveformValue.y());
+    // 构建显示文本
+    QString timeText;
+    if (m_timeRange < 1.0) {
+        // 小于1秒，显示毫秒
+        timeText = QString("时间: %1 ms").arg(dataPoint.x() * 1000, 0, 'f', 1);
+    } else {
+        // 大于等于1秒，显示秒
+        timeText = QString("时间: %1 s").arg(dataPoint.x(), 0, 'f', 3);
+    }
+    QString positionText = timeText + "\n";
     
-    // 更新位置标签 - 显示时间坐标和对应的波形数值
-    QString positionText = QString("时间: %1s\n波形值: %2")
-                            .arg(dataPoint.x(), 0, 'f', 3)
-                            .arg(waveformValue.y(), 0, 'f', 3);
+    if (allValues.isEmpty()) {
+        positionText += "无数据";
+    } else {
+        // 按通道名称排序显示
+        QStringList channelNames = allValues.keys();
+        channelNames.sort();
+        
+        for (const QString &channelName : channelNames) {
+            double value = allValues[channelName];
+            QColor channelColor = getCurveColor(channelName);
+            
+            // 提取通道号（CH1_, CH2_等）
+            QString channelNumber = channelName;
+            if (channelName.startsWith("CH")) {
+                int underscorePos = channelName.indexOf('_');
+                if (underscorePos > 0) {
+                    channelNumber = channelName.left(underscorePos);
+                }
+            }
+            
+            positionText += QString("%1: %2\n")
+                            .arg(channelNumber)
+                            .arg(value, 0, 'f', 3);
+        }
+    }
+    
     m_mousePositionLabel->setPlainText(positionText);
     m_mousePositionLabel->setPos(mousePos.x() + 10, mousePos.y() - 30);
     
-    // 更新十字线 - 水平线显示在波形数值位置
-    m_crosshairH->setLine(50, waveformScreenPos.y(), sceneRect.width() - 50, waveformScreenPos.y());
+    // 更新十字线 - 垂直线跟随鼠标，水平线显示在第一个通道的数值位置
+    if (!allValues.isEmpty()) {
+        QString firstChannel = allValues.keys().first();
+        double firstValue = allValues[firstChannel];
+        QPointF firstChannelScreenPos = dataToScreen(dataPoint.x(), firstValue);
+        m_crosshairH->setLine(50, firstChannelScreenPos.y(), sceneRect.width() - 50, firstChannelScreenPos.y());
+    } else {
+        // 如果没有数据，水平线显示在鼠标位置
+        m_crosshairH->setLine(50, mousePos.y(), sceneRect.width() - 50, mousePos.y());
+    }
+    
     m_crosshairV->setLine(mousePos.x(), 50, mousePos.x(), sceneRect.height() - 50);
     
     // 显示十字线
@@ -424,7 +549,34 @@ void OscilloscopeWidget::mouseMoveEvent(QMouseEvent *event)
     
     if (m_scene) {
         QPointF scenePos = mapToScene(event->pos());
-        updateMousePosition(scenePos);
+        
+        if (m_isSelecting) {
+            // 正在框选，更新选择区域
+            updateSelection(scenePos);
+        } else {
+            // 正常鼠标移动，更新位置显示
+            updateMousePosition(scenePos);
+        }
+    }
+}
+
+void OscilloscopeWidget::mousePressEvent(QMouseEvent *event)
+{
+    QGraphicsView::mousePressEvent(event);
+    
+    if (event->button() == Qt::RightButton && m_scene) {
+        QPointF scenePos = mapToScene(event->pos());
+        startSelection(scenePos);
+    }
+}
+
+void OscilloscopeWidget::mouseReleaseEvent(QMouseEvent *event)
+{
+    QGraphicsView::mouseReleaseEvent(event);
+    
+    if (event->button() == Qt::RightButton && m_isSelecting && m_scene) {
+        QPointF scenePos = mapToScene(event->pos());
+        endSelection(scenePos);
     }
 }
 
@@ -637,7 +789,27 @@ void OscilloscopeWidget::drawTimeAxis()
         double timeValue = m_timeRange * i / 10.0;
         
         QGraphicsTextItem* label = new QGraphicsTextItem();
-        label->setPlainText(QString("%1").arg(timeValue, 0, 'f', 1));
+        
+        // 根据时间范围智能选择显示格式
+        QString timeText;
+        if (m_timeRange < 0.1) {
+            // 小于0.1秒，显示毫秒
+            timeText = QString("%1 ms").arg(timeValue * 1000, 0, 'f', 1);
+        } else if (m_timeRange < 1.0) {
+            // 小于1秒，显示毫秒（3位小数）
+            timeText = QString("%1 ms").arg(timeValue * 1000, 0, 'f', 0);
+        } else if (m_timeRange < 10.0) {
+            // 小于10秒，显示秒（3位小数）
+            timeText = QString("%1 s").arg(timeValue, 0, 'f', 3);
+        } else if (m_timeRange < 100.0) {
+            // 小于100秒，显示秒（2位小数）
+            timeText = QString("%1 s").arg(timeValue, 0, 'f', 2);
+        } else {
+            // 大于100秒，显示秒（1位小数）
+            timeText = QString("%1 s").arg(timeValue, 0, 'f', 1);
+        }
+        
+        label->setPlainText(timeText);
         label->setDefaultTextColor(QColor(200, 200, 200));
         // 设置自适应字体大小
         QFont axisFont("Arial");
@@ -650,7 +822,16 @@ void OscilloscopeWidget::drawTimeAxis()
     
     // 时间轴标题
     QGraphicsTextItem* timeTitle = new QGraphicsTextItem();
-    timeTitle->setPlainText("时间 (s)");
+    
+    // 根据时间范围选择标题
+    QString titleText;
+    if (m_timeRange < 1.0) {
+        titleText = "时间 (ms)";
+    } else {
+        titleText = "时间 (s)";
+    }
+    
+    timeTitle->setPlainText(titleText);
     timeTitle->setDefaultTextColor(QColor(255, 255, 255));
     // 设置自适应字体大小
     QFont titleFont("Arial");
@@ -803,6 +984,29 @@ void OscilloscopeWidget::setAutoScale(bool autoScale)
     }
 }
 
+void OscilloscopeWidget::setFixedValueRange(double minValue, double maxValue)
+{
+    qDebug() << QString("【固定范围】setFixedValueRange被调用: %1 ~ %2")
+                .arg(minValue, 0, 'f', 3)
+                .arg(maxValue, 0, 'f', 3);
+    
+    m_minValue = minValue;
+    m_maxValue = maxValue;
+    m_autoScale = false;  // 禁用自动缩放
+    
+    qDebug() << "【固定范围】m_autoScale设置为false";
+    
+    // 重新绘制整个示波器
+    qDebug() << "【固定范围】开始重绘示波器";
+    drawGrid();
+    drawAxisLabels();
+    drawCurves();
+    
+    qDebug() << QString("【固定范围】设置完成，当前范围: %1 ~ %2")
+                .arg(m_minValue, 0, 'f', 3)
+                .arg(m_maxValue, 0, 'f', 3);
+}
+
 void OscilloscopeWidget::setVisibleCurves(const QList<QString> &visibleKeys)
 {
     m_visibleCurves = visibleKeys;
@@ -898,8 +1102,12 @@ void OscilloscopeWidget::fitToData()
     m_timeOffset = 0.0;
     m_valueOffset = 0.0;
     
+    // 恢复到自动模式
+    m_autoScale = true;
+    
     // 重新绘制
     drawGrid();
+    drawAxisLabels();
     drawCurves();
     
     qDebug() << QString("【全显】时间范围: %1 - %2, 数值范围: %3 - %4")
@@ -907,6 +1115,152 @@ void OscilloscopeWidget::fitToData()
                 .arg(maxTime, 0, 'f', 3)
                 .arg(minValue, 0, 'f', 3)
                 .arg(maxValue, 0, 'f', 3);
+}
+
+void OscilloscopeWidget::startSelection(const QPointF &startPos)
+{
+    if (!m_autoScale) {
+        // 只有在自动模式下才允许框选
+        return;
+    }
+    
+    m_isSelecting = true;
+    m_selectionStart = startPos;
+    m_selectionEnd = startPos;
+    
+    // 隐藏十字线
+    if (m_crosshairH) m_crosshairH->setVisible(false);
+    if (m_crosshairV) m_crosshairV->setVisible(false);
+    
+    // 显示框选图形项
+    if (m_selectionRect) m_selectionRect->setVisible(true);
+    if (m_selectionH1) m_selectionH1->setVisible(true);
+    if (m_selectionH2) m_selectionH2->setVisible(true);
+    if (m_selectionV1) m_selectionV1->setVisible(true);
+    if (m_selectionV2) m_selectionV2->setVisible(true);
+    
+    qDebug() << "【框选】开始框选，起始位置:" << startPos;
+}
+
+void OscilloscopeWidget::updateSelection(const QPointF &currentPos)
+{
+    if (!m_isSelecting) return;
+    
+    m_selectionEnd = currentPos;
+    
+    // 计算选择区域
+    QRectF selectionRect = QRectF(m_selectionStart, m_selectionEnd).normalized();
+    
+    // 限制在有效区域内
+    QRectF sceneRect = m_scene->sceneRect();
+    QRectF validRect(50, 50, sceneRect.width() - 100, sceneRect.height() - 100);
+    selectionRect = selectionRect.intersected(validRect);
+    
+    // 更新矩形
+    if (m_selectionRect) {
+        m_selectionRect->setRect(selectionRect);
+    }
+    
+    // 更新边界线
+    if (m_selectionH1) {
+        m_selectionH1->setLine(selectionRect.left(), selectionRect.top(), 
+                              selectionRect.right(), selectionRect.top());
+    }
+    if (m_selectionH2) {
+        m_selectionH2->setLine(selectionRect.left(), selectionRect.bottom(), 
+                              selectionRect.right(), selectionRect.bottom());
+    }
+    if (m_selectionV1) {
+        m_selectionV1->setLine(selectionRect.left(), selectionRect.top(), 
+                              selectionRect.left(), selectionRect.bottom());
+    }
+    if (m_selectionV2) {
+        m_selectionV2->setLine(selectionRect.right(), selectionRect.top(), 
+                              selectionRect.right(), selectionRect.bottom());
+    }
+}
+
+void OscilloscopeWidget::endSelection(const QPointF &endPos)
+{
+    if (!m_isSelecting) return;
+    
+    m_selectionEnd = endPos;
+    
+    // 计算选择区域
+    QRectF selectionRect = QRectF(m_selectionStart, m_selectionEnd).normalized();
+    
+    // 检查选择区域是否足够大
+    if (selectionRect.width() < 10 || selectionRect.height() < 10) {
+        // 选择区域太小，取消选择
+        clearSelection();
+        return;
+    }
+    
+    // 执行放大
+    zoomToSelection();
+    
+    // 清除选择状态
+    clearSelection();
+    
+    qDebug() << "【框选】结束框选，选择区域:" << selectionRect;
+}
+
+void OscilloscopeWidget::clearSelection()
+{
+    m_isSelecting = false;
+    
+    // 隐藏框选图形项
+    if (m_selectionRect) m_selectionRect->setVisible(false);
+    if (m_selectionH1) m_selectionH1->setVisible(false);
+    if (m_selectionH2) m_selectionH2->setVisible(false);
+    if (m_selectionV1) m_selectionV1->setVisible(false);
+    if (m_selectionV2) m_selectionV2->setVisible(false);
+}
+
+void OscilloscopeWidget::zoomToSelection()
+{
+    if (!m_scene) return;
+    
+    // 计算选择区域的数据坐标
+    QPointF startData = screenToData(m_selectionStart);
+    QPointF endData = screenToData(m_selectionEnd);
+    
+    // 计算新的时间范围
+    double newTimeMin = qMin(startData.x(), endData.x());
+    double newTimeMax = qMax(startData.x(), endData.x());
+    double newTimeRange = newTimeMax - newTimeMin;
+    
+    // 计算新的数值范围
+    double newValueMin = qMin(startData.y(), endData.y());
+    double newValueMax = qMax(startData.y(), endData.y());
+    double newValueRange = newValueMax - newValueMin;
+    
+    // 添加10%的边距
+    double timeMargin = newTimeRange * 0.1;
+    double valueMargin = newValueRange * 0.1;
+    
+    newTimeMin -= timeMargin;
+    newTimeMax += timeMargin;
+    newValueMin -= valueMargin;
+    newValueMax += valueMargin;
+    
+    // 更新显示范围
+    m_timeOffset = newTimeMin;
+    m_timeRange = newTimeMax - newTimeMin;
+    m_minValue = newValueMin;
+    m_maxValue = newValueMax;
+    m_autoScale = false;  // 切换到固定范围模式
+    
+    // 重新绘制
+    drawGrid();
+    drawAxisLabels();
+    drawCurves();
+    
+    qDebug() << QString("【框选放大】时间范围: %1 - %2, 数值范围: %3 - %4")
+                .arg(newTimeMin, 0, 'f', 3)
+                .arg(newTimeMax, 0, 'f', 3)
+                .arg(newValueMin, 0, 'f', 3)
+                .arg(newValueMax, 0, 'f', 3);
 }
 
 void OscilloscopeWidget::updateValueRange()
@@ -1013,6 +1367,7 @@ DataAcquisition::DataAcquisition(QWidget *parent) : QWidget(parent)
     , m_paramDictionary(nullptr)
     , m_canTxRx(nullptr)
     , m_isRequesting(false)
+    , m_autoModeEnabled(false)
     , m_pendingRequests(0)
     , m_maxDebugMessages(1000)
     , m_requestCount(0)
@@ -1183,6 +1538,68 @@ void DataAcquisition::setupControlPanel()
     
     m_clearButton = new QPushButton("清空数据");
     qDebug() << "【控制面板】清空数据按钮创建完成";
+    
+    // 创建自动模式按钮
+    m_autoModeButton = new QPushButton("自动模式");
+    m_autoModeButton->setCheckable(true);
+    m_autoModeButton->setChecked(false);
+    m_autoModeButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    m_autoModeButton->setStyleSheet(
+        "QPushButton {"
+        "    background-color: #404040;"
+        "    color: white;"
+        "    border: 1px solid #606060;"
+        "    border-radius: 3px;"
+        "    padding: 5px 10px;"
+        "    font-weight: bold;"
+        "    text-align: center;"
+        "}"
+        "QPushButton:hover {"
+        "    background-color: #505050;"
+        "}"
+        "QPushButton:checked {"
+        "    background-color: #2196f3;"
+        "    color: white;"
+        "    border-color: #1976d2;"
+        "    text-align: center;"
+        "}"
+    );
+    qDebug() << "【控制面板】自动模式按钮创建完成";
+    
+    // 创建上下限文本框
+    m_minValueSpinBox = new QDoubleSpinBox();
+    m_minValueSpinBox->setRange(-999999.0, 999999.0);
+    m_minValueSpinBox->setValue(-10.0);
+    m_minValueSpinBox->setDecimals(3);
+    m_minValueSpinBox->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    m_minValueSpinBox->setStyleSheet(
+        "QDoubleSpinBox {"
+        "    background-color: #505050;"
+        "    color: #ffffff;"
+        "    border: 1px solid #666666;"
+        "    border-radius: 3px;"
+        "    padding: 2px 5px;"
+        "    font-size: 0.8em;"
+        "}"
+    );
+    qDebug() << "【控制面板】下限文本框创建完成";
+    
+    m_maxValueSpinBox = new QDoubleSpinBox();
+    m_maxValueSpinBox->setRange(-999999.0, 999999.0);
+    m_maxValueSpinBox->setValue(10.0);
+    m_maxValueSpinBox->setDecimals(3);
+    m_maxValueSpinBox->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    m_maxValueSpinBox->setStyleSheet(
+        "QDoubleSpinBox {"
+        "    background-color: #505050;"
+        "    color: #ffffff;"
+        "    border: 1px solid #666666;"
+        "    border-radius: 3px;"
+        "    padding: 2px 5px;"
+        "    font-size: 0.8em;"
+        "}"
+    );
+    qDebug() << "【控制面板】上限文本框创建完成";
 
     // 通道数量选择
     qDebug() << "【控制面板】创建通道数量选择...";
@@ -1234,6 +1651,18 @@ void DataAcquisition::setupControlPanel()
     connect(m_autoScaleCheckBox, &QCheckBox::stateChanged,
             this, &DataAcquisition::onAutoScaleChanged);
     qDebug() << "【控制面板】自动缩放选项信号已连接";
+    
+    // 连接自动模式按钮信号
+    connect(m_autoModeButton, &QPushButton::toggled,
+            this, &DataAcquisition::onAutoModeToggled);
+    qDebug() << "【控制面板】自动模式按钮信号已连接";
+    
+    // 连接数值范围变化信号
+    connect(m_minValueSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, &DataAcquisition::onValueRangeChanged);
+    connect(m_maxValueSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, &DataAcquisition::onValueRangeChanged);
+    qDebug() << "【控制面板】数值范围变化信号已连接";
 
     // 初始化通道配置
     qDebug() << "【控制面板】初始化通道配置...";
@@ -1329,10 +1758,33 @@ QWidget* DataAcquisition::createControlPanelWidget()
     QVBoxLayout *buttonLayout = new QVBoxLayout();
     buttonLayout->setSpacing(5);  // 微小间距
     
-    // 设置按钮尺寸策略 - 高度占容器高度的1/3
+    // 创建上下限文本框容器
+    QWidget *rangeContainer = new QWidget();
+    rangeContainer->setStyleSheet("background-color: transparent;");
+    QHBoxLayout *rangeLayout = new QHBoxLayout(rangeContainer);
+    rangeLayout->setContentsMargins(0, 0, 0, 0);
+    rangeLayout->setSpacing(5);
+    
+    // 下限文本框
+    QLabel *minLabel = new QLabel("下限:");
+    minLabel->setStyleSheet("color: #ffffff; font-weight: bold; font-size: 0.8em;");
+    
+    // 上限文本框
+    QLabel *maxLabel = new QLabel("上限:");
+    maxLabel->setStyleSheet("color: #ffffff; font-weight: bold; font-size: 0.8em;");
+    
+    rangeLayout->addWidget(minLabel);
+    rangeLayout->addWidget(m_minValueSpinBox);
+    rangeLayout->addWidget(maxLabel);
+    rangeLayout->addWidget(m_maxValueSpinBox);
+    
+    // 设置按钮尺寸策略 - 每个按钮占1/5容器宽度
+    m_autoModeButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     m_startStopButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     m_clearButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     
+    buttonLayout->addWidget(m_autoModeButton);
+    buttonLayout->addWidget(rangeContainer);
     buttonLayout->addWidget(m_startStopButton);
     buttonLayout->addWidget(m_clearButton);
     
@@ -1598,6 +2050,66 @@ void DataAcquisition::onAutoScaleChanged(int state)
     m_oscilloscope->setAutoScale(state == Qt::Checked);
 }
 
+void DataAcquisition::onAutoModeToggled(bool enabled)
+{
+    qDebug() << "【自动模式】onAutoModeToggled被调用，enabled:" << enabled;
+    m_autoModeEnabled = enabled;
+    
+    if (enabled) {
+        // 启用固定模式：使用固定的上下限
+        qDebug() << "【自动模式】切换到固定模式";
+        m_oscilloscope->setAutoScale(false);
+        double minValue = m_minValueSpinBox->value();
+        double maxValue = m_maxValueSpinBox->value();
+        qDebug() << "【自动模式】设置范围:" << minValue << "~" << maxValue;
+        m_oscilloscope->setFixedValueRange(minValue, maxValue);
+        m_autoModeButton->setText("固定模式");
+        m_autoModeButton->repaint();
+        m_autoModeButton->update();
+        qDebug() << "【自动模式】按钮文字设置为: 固定模式，当前文字:" << m_autoModeButton->text();
+        addDebugMessage("已切换到固定范围模式");
+    } else {
+        // 禁用固定模式：恢复自动缩放
+        qDebug() << "【自动模式】切换到自动模式";
+        m_oscilloscope->setAutoScale(true);
+        m_autoModeButton->setText("自动模式");
+        m_autoModeButton->repaint();
+        m_autoModeButton->update();
+        qDebug() << "【自动模式】按钮文字设置为: 自动模式，当前文字:" << m_autoModeButton->text();
+        addDebugMessage("已切换到自动缩放模式");
+    }
+}
+
+void DataAcquisition::onValueRangeChanged()
+{
+    qDebug() << "【数值范围】onValueRangeChanged被调用，m_autoModeEnabled:" << m_autoModeEnabled;
+    
+    if (m_autoModeEnabled) {
+        // 只有在固定模式启用时才更新范围
+        double minValue = m_minValueSpinBox->value();
+        double maxValue = m_maxValueSpinBox->value();
+        
+        qDebug() << "【数值范围】获取到范围值:" << minValue << "~" << maxValue;
+        
+        // 确保上限大于下限
+        if (maxValue <= minValue) {
+            maxValue = minValue + 1.0;
+            m_maxValueSpinBox->setValue(maxValue);
+            qDebug() << "【数值范围】调整上限为:" << maxValue;
+        }
+        
+        qDebug() << "【数值范围】调用setFixedValueRange";
+        m_oscilloscope->setFixedValueRange(minValue, maxValue);
+        addDebugMessage(QString("数值范围已更新: %1 ~ %2").arg(minValue).arg(maxValue));
+        
+        qDebug() << QString("【数值范围】固定模式范围更新: %1 ~ %2")
+                    .arg(minValue, 0, 'f', 3)
+                    .arg(maxValue, 0, 'f', 3);
+    } else {
+        qDebug() << "【数值范围】自动模式，忽略范围更新";
+    }
+}
+
 void DataAcquisition::startAcquisition()
 {
     qDebug() << "【采集】startAcquisition被调用";
@@ -1608,8 +2120,14 @@ void DataAcquisition::startAcquisition()
     }
 
     m_isAcquiring = true;
-    m_startTime = QDateTime::currentDateTime().toMSecsSinceEpoch() / 1000.0;
-    qDebug() << "【采集】设置m_isAcquiring = true，startTime =" << m_startTime;
+    
+    // 只有在第一次采集或数据被清空后才设置起始时间
+    if (m_startTime <= 0) {
+        m_startTime = QDateTime::currentDateTime().toMSecsSinceEpoch() / 1000.0;
+        qDebug() << "【采集】设置新的startTime =" << m_startTime;
+    } else {
+        qDebug() << "【采集】使用现有的startTime =" << m_startTime << "，继续从上次位置采集";
+    }
     
     // 更新UI
     m_startStopButton->setText("停止采集");
@@ -1720,7 +2238,12 @@ void DataAcquisition::clearData()
         return;
     }
     
-        m_oscilloscope->clearData();
+    // 清空示波器数据
+    m_oscilloscope->clearData();
+    
+    // 重置起始时间，下次采集会重新开始
+    m_startTime = -1.0;
+    
     addDebugMessage("数据已清空");
 }
 
@@ -1790,6 +2313,40 @@ void DataAcquisition::sendParameterRead(uint8_t nodeId, uint16_t index, uint8_t 
                     .arg(nodeId)
                     .arg(index, 4, 16, QLatin1Char('0'))
                     .arg(subindex, 2, 16, QLatin1Char('0'))
+                    .arg(cobId, 0, 16);
+    }
+    
+    sendCANFrame(cobId, data);
+}
+
+void DataAcquisition::sendMultiParameterRead(uint8_t nodeId, uint16_t index1, uint8_t subindex1, uint16_t index2, uint8_t subindex2)
+{
+    QByteArray data;
+    // 前三个字节是示波器通道1的索引和子索引
+    data.append(static_cast<char>((index1 >> 8) & 0xFF));
+    data.append(static_cast<char>(index1 & 0xFF));
+    data.append(static_cast<char>(subindex1));
+    
+    // 第4到第6个字节是示波器通道2的索引和子索引
+    data.append(static_cast<char>((index2 >> 8) & 0xFF));
+    data.append(static_cast<char>(index2 & 0xFF));
+    data.append(static_cast<char>(subindex2));
+    
+    // 最后两个字节默认给00 00
+    data.append(static_cast<char>(0x00));
+    data.append(static_cast<char>(0x00));
+
+    uint32_t cobId = buildUpdateCOBId(UPDATE_CMD_READ_MULTI, nodeId);
+    
+    // 每10次请求打印一次调试信息（减少打印频率）
+    static int debugCount = 0;
+    if (++debugCount % 10 == 0) {
+        qDebug() << QString("【CAN多通道发送】NodeID:%1 Ch1:0x%2:0x%3 Ch2:0x%4:0x%5 COB-ID:0x%6")
+                    .arg(nodeId)
+                    .arg(index1, 4, 16, QLatin1Char('0'))
+                    .arg(subindex1, 2, 16, QLatin1Char('0'))
+                    .arg(index2, 4, 16, QLatin1Char('0'))
+                    .arg(subindex2, 2, 16, QLatin1Char('0'))
                     .arg(cobId, 0, 16);
     }
     
@@ -1867,84 +2424,149 @@ void DataAcquisition::parseCANFrameForOscilloscope(const VCI_CAN_OBJ &frame)
                 .arg(frame.DataLen)
                 .arg(dataHex.trimmed());
     
-    // 直接解析所有CAN帧，不管是什么类型
+    // 根据当前启用的通道数量决定解析方式
     try {
-        // 解析参数数据（使用已解析的NodeID）
-        uint16_t parameterIndex = (frame.Data[0] << 8) | frame.Data[1];
-        uint8_t parameterSubindex = frame.Data[2];
-        
-        qDebug() << QString("【示波器解析】NodeID:%1 Index:0x%2 SubIndex:0x%3")
-                    .arg(receivedNodeId)
-                    .arg(parameterIndex, 4, 16, QLatin1Char('0'))
-                    .arg(parameterSubindex, 2, 16, QLatin1Char('0'));
-        
-        // 获取参数值（从第4字节开始）
-        if (frame.DataLen >= 8) {
-            // 根据参数字典解析数据
-            ODEntry paramEntry = m_paramDictionary->getParameter(parameterIndex, parameterSubindex);
-            
-            if (paramEntry.index != 0) { // 找到参数定义
-                float floatValue = 0.0f;
-                
-                // 根据参数类型解析数据
-                switch (paramEntry.type) {
-                    case OD_TYPE_FLOAT:
-                        memcpy(&floatValue, &frame.Data[4], 4);
-                        break;
-                    case OD_TYPE_INT32:
-                        {
-                            int32_t intValue;
-                            memcpy(&intValue, &frame.Data[4], 4);
-                            floatValue = static_cast<float>(intValue);
-                        }
-                        break;
-                    case OD_TYPE_UINT32:
-                        {
-                            uint32_t uintValue;
-                            memcpy(&uintValue, &frame.Data[4], 4);
-                            floatValue = static_cast<float>(uintValue);
-                        }
-                        break;
-                    case OD_TYPE_INT16:
-                        {
-                            int16_t intValue;
-                            memcpy(&intValue, &frame.Data[4], 2);
-                            floatValue = static_cast<float>(intValue);
-                        }
-            break;
-                    case OD_TYPE_UINT16:
-                        {
-                            uint16_t uintValue;
-                            memcpy(&uintValue, &frame.Data[4], 2);
-                            floatValue = static_cast<float>(uintValue);
+        // 检查当前启用的通道数量
+        int enabledChannelCount = 0;
+        for (const auto& config : m_channelConfigs) {
+            if (config.enabled) {
+                enabledChannelCount++;
             }
-            break;
-                    case OD_TYPE_INT8:
-                        {
-                            int8_t intValue;
-                            memcpy(&intValue, &frame.Data[4], 1);
-                            floatValue = static_cast<float>(intValue);
-                        }
-                        break;
-                    case OD_TYPE_UINT8:
-                        {
-                            uint8_t uintValue;
-                            memcpy(&uintValue, &frame.Data[4], 1);
-                            floatValue = static_cast<float>(uintValue);
-                        }
-                        break;
-                    default:
-                        // 默认按32位整数处理
-                        {
-                            int32_t intValue;
-                            memcpy(&intValue, &frame.Data[4], 4);
-                            floatValue = static_cast<float>(intValue);
-                        }
-                        break;
-                }
+        }
+        
+        // 如果启用的通道数量为2，解析为多通道数据
+        if (enabledChannelCount == 2 && cmdType == UPDATE_CMD_RESPONSE && frame.DataLen == 8) {
+            // 多通道响应：前4个字节是第一个通道的数据，后4个字节是第二个通道的数据
+            qDebug() << "【示波器解析】检测到多通道响应数据，通道数:" << enabledChannelCount;
+            
+            // 解析第一个通道的数据（前4个字节）
+            parseMultiChannelData(frame, 0, 4, receivedNodeId);
+            
+            // 解析第二个通道的数据（后4个字节）
+            parseMultiChannelData(frame, 4, 8, receivedNodeId);
+        } else {
+            // 单通道响应：解析参数数据（使用已解析的NodeID）
+            uint16_t parameterIndex = (frame.Data[0] << 8) | frame.Data[1];
+            uint8_t parameterSubindex = frame.Data[2];
+            
+            qDebug() << QString("【示波器解析】NodeID:%1 Index:0x%2 SubIndex:0x%3")
+                        .arg(receivedNodeId)
+                        .arg(parameterIndex, 4, 16, QLatin1Char('0'))
+                        .arg(parameterSubindex, 2, 16, QLatin1Char('0'));
+            
+            // 获取参数值（从第4字节开始）
+            if (frame.DataLen >= 8) {
+                // 根据参数字典解析数据
+                ODEntry paramEntry = m_paramDictionary->getParameter(parameterIndex, parameterSubindex);
                 
-                // 检查数据有效性
-                if (!qIsNaN(floatValue) && !qIsInf(floatValue)) {
+                if (paramEntry.index != 0) { // 找到参数定义
+                    float floatValue = 0.0f;
+                    
+                    // 根据参数类型解析数据
+                    switch (paramEntry.type) {
+                        case OD_TYPE_FLOAT:
+                            memcpy(&floatValue, &frame.Data[4], 4);
+                            break;
+                        case OD_TYPE_INT32:
+                            {
+                                int32_t intValue;
+                                memcpy(&intValue, &frame.Data[4], 4);
+                                floatValue = static_cast<float>(intValue);
+                            }
+                            break;
+                        case OD_TYPE_UINT32:
+                            {
+                                uint32_t uintValue;
+                                memcpy(&uintValue, &frame.Data[4], 4);
+                                floatValue = static_cast<float>(uintValue);
+                            }
+                            break;
+                        case OD_TYPE_INT16:
+                            {
+                                int16_t intValue;
+                                memcpy(&intValue, &frame.Data[4], 2);
+                                floatValue = static_cast<float>(intValue);
+                            }
+                            break;
+                        case OD_TYPE_UINT16:
+                            {
+                                uint16_t uintValue;
+                                memcpy(&uintValue, &frame.Data[4], 2);
+                                floatValue = static_cast<float>(uintValue);
+                            }
+                            break;
+                        case OD_TYPE_INT8:
+                            {
+                                int8_t intValue;
+                                memcpy(&intValue, &frame.Data[4], 1);
+                                floatValue = static_cast<float>(intValue);
+                            }
+                            break;
+                        case OD_TYPE_UINT8:
+                            {
+                                uint8_t uintValue;
+                                memcpy(&uintValue, &frame.Data[4], 1);
+                                floatValue = static_cast<float>(uintValue);
+                            }
+                            break;
+                        default:
+                            // 默认按32位整数处理
+                            {
+                                int32_t intValue;
+                                memcpy(&intValue, &frame.Data[4], 4);
+                                floatValue = static_cast<float>(intValue);
+                            }
+                            break;
+                    }
+                    
+                    // 检查数据有效性
+                    if (!qIsNaN(floatValue) && !qIsInf(floatValue)) {
+                        // 获取当前时间戳
+                        double currentTime = QDateTime::currentDateTime().toMSecsSinceEpoch() / 1000.0;
+                        
+                        // 如果是第一次接收数据，设置起始时间
+                        if (m_startTime <= 0) {
+                            m_startTime = currentTime;
+                        }
+                        
+                        // 计算相对时间戳（相对于起始时间）
+                        double relativeTime = currentTime - m_startTime;
+
+                        // 根据通道配置确定通道名称
+                        QString channelName;
+                        QString displayName;
+                        
+                        // 查找匹配的通道配置
+                        bool foundMatchingChannel = false;
+                        for (const auto& config : m_channelConfigs) {
+                            if (config.enabled && 
+                                config.parameterIndex == parameterIndex && 
+                                config.parameterSubindex == parameterSubindex) {
+                                channelName = QString("CH%1_%2").arg(config.channelIndex + 1).arg(paramEntry.name);
+                                displayName = QString("通道%1: %2 (%3)").arg(config.channelIndex + 1).arg(paramEntry.name).arg(paramEntry.unit);
+                                foundMatchingChannel = true;
+                                break;
+                            }
+                        }
+                        
+                        // 如果没有找到匹配的通道配置，使用默认通道名称
+                        if (!foundMatchingChannel) {
+                            channelName = QString("CH%1_%2").arg(expectedNodeId).arg(paramEntry.name);
+                            displayName = QString("%1 (%2)").arg(paramEntry.name).arg(paramEntry.unit);
+                        }
+                            
+                        emit dataPointAdded(channelName, relativeTime, floatValue, displayName);
+                    }
+                } else {
+                    // 未找到参数定义，使用原始数据
+                    int32_t paramValue;
+                    memcpy(&paramValue, &frame.Data[4], 4);
+                    float floatValue = static_cast<float>(paramValue);
+                    
+                    qDebug() << QString("【示波器原始数据】参数值:0x%1 (%2)")
+                                .arg(paramValue, 8, 16, QLatin1Char('0'))
+                                .arg(floatValue, 0, 'f', 3);
+                    
                     // 获取当前时间戳
                     double currentTime = QDateTime::currentDateTime().toMSecsSinceEpoch() / 1000.0;
                     
@@ -1956,90 +2578,17 @@ void DataAcquisition::parseCANFrameForOscilloscope(const VCI_CAN_OBJ &frame)
                     // 计算相对时间戳（相对于起始时间）
                     double relativeTime = currentTime - m_startTime;
 
-                // 根据通道配置确定通道名称
-                QString channelName;
-                QString displayName;
-                
-                // 查找匹配的通道配置
-                bool foundMatchingChannel = false;
-                for (const auto& config : m_channelConfigs) {
-                    if (config.enabled && 
-                        config.parameterIndex == parameterIndex && 
-                        config.parameterSubindex == parameterSubindex) {
-                        channelName = QString("CH%1_%2").arg(config.channelIndex + 1).arg(paramEntry.name);
-                        displayName = QString("通道%1: %2 (%3)").arg(config.channelIndex + 1).arg(paramEntry.name).arg(paramEntry.unit);
-                        foundMatchingChannel = true;
-                        break;
-                    }
+                    // 添加数据点到示波器
+                    QString paramName = QString("参数0x%1.%2").arg(parameterIndex, 4, 16, QLatin1Char('0')).arg(parameterSubindex, 2, 16, QLatin1Char('0'));
+                    QString channelName = QString("CH%1_%2").arg(expectedNodeId).arg(paramName);
+                    
+                    qDebug() << QString("【示波器原始数据】通道:%1 时间:%2 值:%3")
+                                .arg(channelName)
+                                .arg(relativeTime, 0, 'f', 3)
+                                .arg(floatValue, 0, 'f', 3);
+                    
+                    emit dataPointAdded(channelName, relativeTime, floatValue, paramName);
                 }
-                
-                // 如果没有找到匹配的通道配置，使用默认通道名称
-                if (!foundMatchingChannel) {
-                    channelName = QString("CH%1_%2").arg(expectedNodeId).arg(paramEntry.name);
-                    displayName = QString("%1 (%2)").arg(paramEntry.name).arg(paramEntry.unit);
-                }
-                    
-//                    qDebug() << QString("【示波器数据】通道:%1 时间:%2 值:%3 类型:%4")
-//                                .arg(channelName)
-//                                .arg(relativeTime, 0, 'f', 3)
-//                                .arg(floatValue, 0, 'f', 3)
-//                                .arg(paramEntry.type);
-                    
-//                    // 打印详细的坐标信息
-//                    qDebug() << QString("【示波器坐标】X坐标(时间):%1 Y坐标(值):%2 原始值:%3")
-//                                .arg(relativeTime, 0, 'f', 6)
-//                                .arg(floatValue, 0, 'f', 6)
-//                                .arg(floatValue);
-                    
-//                    qDebug() << QString("【示波器发送】准备发送数据到示波器: 通道=%1, X=%2, Y=%3")
-//                                .arg(channelName)
-//                                .arg(relativeTime, 0, 'f', 6)
-//                                .arg(floatValue, 0, 'f', 6);
-                    
-                    emit dataPointAdded(channelName, relativeTime, floatValue, displayName);
-            }
-        } else {
-                // 未找到参数定义，使用原始数据
-                int32_t paramValue;
-                memcpy(&paramValue, &frame.Data[4], 4);
-                float floatValue = static_cast<float>(paramValue);
-                
-                qDebug() << QString("【示波器原始数据】参数值:0x%1 (%2)")
-                            .arg(paramValue, 8, 16, QLatin1Char('0'))
-                            .arg(floatValue, 0, 'f', 3);
-                
-                // 获取当前时间戳
-                double currentTime = QDateTime::currentDateTime().toMSecsSinceEpoch() / 1000.0;
-                
-                // 如果是第一次接收数据，设置起始时间
-                if (m_startTime <= 0) {
-                    m_startTime = currentTime;
-                }
-                
-                // 计算相对时间戳（相对于起始时间）
-                double relativeTime = currentTime - m_startTime;
-
-                // 添加数据点到示波器
-                QString paramName = QString("参数0x%1.%2").arg(parameterIndex, 4, 16, QLatin1Char('0')).arg(parameterSubindex, 2, 16, QLatin1Char('0'));
-                QString channelName = QString("CH%1_%2").arg(expectedNodeId).arg(paramName);
-                
-                qDebug() << QString("【示波器原始数据】通道:%1 时间:%2 值:%3")
-                            .arg(channelName)
-                            .arg(relativeTime, 0, 'f', 3)
-                            .arg(floatValue, 0, 'f', 3);
-                
-                // 打印详细的坐标信息
-                qDebug() << QString("【示波器坐标】X坐标(时间):%1 Y坐标(值):%2 原始值:%3")
-                            .arg(relativeTime, 0, 'f', 6)
-                            .arg(floatValue, 0, 'f', 6)
-                            .arg(floatValue);
-                
-                qDebug() << QString("【示波器发送】准备发送数据到示波器: 通道=%1, X=%2, Y=%3")
-                            .arg(channelName)
-                            .arg(relativeTime, 0, 'f', 6)
-                            .arg(floatValue, 0, 'f', 6);
-                
-                emit dataPointAdded(channelName, relativeTime, floatValue, paramName);
             }
         }
     } catch (const std::exception &e) {
@@ -2047,6 +2596,132 @@ void DataAcquisition::parseCANFrameForOscilloscope(const VCI_CAN_OBJ &frame)
     } catch (...) {
         qDebug() << "解析CAN帧时发生未知异常";
     }
+}
+
+void DataAcquisition::parseMultiChannelData(const VCI_CAN_OBJ &frame, int startByte, int endByte, uint8_t nodeId)
+{
+    // 解析4字节数据
+    if (endByte - startByte != 4) {
+        qDebug() << "【多通道解析】数据长度错误，期望4字节，实际" << (endByte - startByte) << "字节";
+        return;
+    }
+    
+    // 根据通道索引确定通道配置
+    int channelIndex = (startByte == 0) ? 0 : 1; // 前4字节是通道1，后4字节是通道2
+    
+    // 查找匹配的通道配置
+    ChannelConfig* channelConfig = nullptr;
+    for (auto& config : m_channelConfigs) {
+        if (config.enabled && config.channelIndex == channelIndex) {
+            channelConfig = &config;
+            break;
+        }
+    }
+    
+    if (!channelConfig) {
+        qDebug() << QString("【多通道解析】未找到通道%1的配置").arg(channelIndex + 1);
+        return;
+    }
+    
+    // 获取当前时间戳
+    double currentTime = QDateTime::currentDateTime().toMSecsSinceEpoch() / 1000.0;
+    
+    // 如果是第一次接收数据，设置起始时间
+    if (m_startTime <= 0) {
+        m_startTime = currentTime;
+    }
+    
+    // 计算相对时间戳（相对于起始时间）
+    double relativeTime = currentTime - m_startTime;
+    
+    // 根据参数类型解析数据
+    float floatValue = 0.0f;
+    
+    // 获取参数定义
+    ODEntry paramEntry = m_paramDictionary->getParameter(channelConfig->parameterIndex, channelConfig->parameterSubindex);
+    
+    if (paramEntry.index != 0) { // 找到参数定义
+        // 根据参数类型解析数据
+        switch (paramEntry.type) {
+            case OD_TYPE_FLOAT:
+                memcpy(&floatValue, &frame.Data[startByte], 4);
+                break;
+            case OD_TYPE_INT32:
+                {
+                    int32_t intValue;
+                    memcpy(&intValue, &frame.Data[startByte], 4);
+                    floatValue = static_cast<float>(intValue);
+                }
+                break;
+            case OD_TYPE_UINT32:
+                {
+                    uint32_t uintValue;
+                    memcpy(&uintValue, &frame.Data[startByte], 4);
+                    floatValue = static_cast<float>(uintValue);
+                }
+                break;
+            case OD_TYPE_INT16:
+                {
+                    int16_t intValue;
+                    memcpy(&intValue, &frame.Data[startByte], 2);
+                    floatValue = static_cast<float>(intValue);
+                }
+                break;
+            case OD_TYPE_UINT16:
+                {
+                    uint16_t uintValue;
+                    memcpy(&uintValue, &frame.Data[startByte], 2);
+                    floatValue = static_cast<float>(uintValue);
+                }
+                break;
+            case OD_TYPE_INT8:
+                {
+                    int8_t intValue;
+                    memcpy(&intValue, &frame.Data[startByte], 1);
+                    floatValue = static_cast<float>(intValue);
+                }
+                break;
+            case OD_TYPE_UINT8:
+                {
+                    uint8_t uintValue;
+                    memcpy(&uintValue, &frame.Data[startByte], 1);
+                    floatValue = static_cast<float>(uintValue);
+                }
+                break;
+            default:
+                // 默认按32位整数处理
+                {
+                    int32_t intValue;
+                    memcpy(&intValue, &frame.Data[startByte], 4);
+                    floatValue = static_cast<float>(intValue);
+                }
+                break;
+        }
+    } else {
+        // 未找到参数定义，使用原始数据
+        int32_t paramValue;
+        memcpy(&paramValue, &frame.Data[startByte], 4);
+        floatValue = static_cast<float>(paramValue);
+    }
+    
+    // 检查数据有效性
+    if (qIsNaN(floatValue) || qIsInf(floatValue)) {
+        qDebug() << "【多通道解析】无效数据值:" << floatValue;
+        return;
+    }
+    
+    // 生成通道名称和显示名称
+    QString channelName = QString("CH%1_%2").arg(channelIndex + 1).arg(channelConfig->parameterName);
+    QString displayName = QString("通道%1: %2").arg(channelIndex + 1).arg(channelConfig->parameterName);
+    
+    qDebug() << QString("【多通道解析】通道%1 时间:%2 值:%3 参数:%4")
+                .arg(channelIndex + 1)
+                .arg(relativeTime, 0, 'f', 3)
+                .arg(floatValue, 0, 'f', 3)
+                .arg(channelConfig->parameterName);
+    
+    // 发送数据点到示波器
+    emit dataPointAdded(channelName, relativeTime, floatValue, displayName);
 }
 
 void DataAcquisition::parseUpdateProtocol(const VCI_CAN_OBJ &frame)
@@ -2145,9 +2820,23 @@ void DataAcquisition::requestParameters()
     // 异步发送，避免阻塞定时器
     QMetaObject::invokeMethod(this, [this]() {
         // 在下一个事件循环中发送，不阻塞当前定时器
-        // 遍历所有启用的通道
+        // 检查启用的通道数量
+        QVector<ChannelConfig> enabledChannels;
         for (const auto& config : m_channelConfigs) {
             if (config.enabled) {
+                enabledChannels.append(config);
+            }
+        }
+        
+        // 如果启用的通道数量为2，使用多通道读取命令
+        if (enabledChannels.size() == 2) {
+            sendMultiParameterRead(m_nodeIdSpinBox->value(), 
+                                 enabledChannels[0].parameterIndex, enabledChannels[0].parameterSubindex,
+                                 enabledChannels[1].parameterIndex, enabledChannels[1].parameterSubindex);
+            m_requestCount++;
+        } else {
+            // 其他情况使用单通道读取命令
+            for (const auto& config : enabledChannels) {
                 sendParameterRead(m_nodeIdSpinBox->value(), config.parameterIndex, config.parameterSubindex);
                 m_requestCount++;
             }

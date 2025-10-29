@@ -92,6 +92,7 @@ public:
     void clearData();
     void setTimeRange(double range);
     void setAutoScale(bool autoScale);
+    void setFixedValueRange(double minValue, double maxValue);
     void setVisibleCurves(const QList<QString> &visibleKeys);
     
     // 缩放和坐标功能
@@ -115,6 +116,8 @@ public:
     
     // 鼠标事件处理
     void mouseMoveEvent(QMouseEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
     void leaveEvent(QEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
 
@@ -132,7 +135,13 @@ private:
     QPointF screenToData(const QPointF &screenPoint);
     void updateMousePosition(const QPointF &mousePos);
     QPointF findValueAtTime(double timestamp);
+    QMap<QString, double> findAllValuesAtTime(double timestamp);
     void updateFrequencyDisplay();
+    void startSelection(const QPointF &startPos);
+    void updateSelection(const QPointF &currentPos);
+    void endSelection(const QPointF &endPos);
+    void clearSelection();
+    void zoomToSelection();
     
     QGraphicsScene *m_scene;
     QMap<QString, QVector<QPointF>> m_dataBuffers;
@@ -167,6 +176,16 @@ private:
     // 60秒滚动显示
     double m_maxTimeWindow;  // 最大时间窗口（60秒）
     double m_currentTimeOffset;  // 当前时间偏移
+    
+    // 框选放大功能
+    bool m_isSelecting;  // 是否正在框选
+    QPointF m_selectionStart;  // 框选开始位置
+    QPointF m_selectionEnd;  // 框选结束位置
+    QGraphicsRectItem *m_selectionRect;  // 框选矩形
+    QGraphicsLineItem *m_selectionH1;  // 框选水平线1
+    QGraphicsLineItem *m_selectionH2;  // 框选水平线2
+    QGraphicsLineItem *m_selectionV1;  // 框选垂直线1
+    QGraphicsLineItem *m_selectionV2;  // 框选垂直线2
 };
 
 class DataAcquisition : public QWidget
@@ -198,6 +217,8 @@ public slots:
     void onParameterSelectionChanged(int channelIndex);
     void onTimeRangeChanged(int index);
     void onAutoScaleChanged(int state);
+    void onAutoModeToggled(bool enabled);
+    void onValueRangeChanged();
     void updatePlot();
     void requestParameters();
     void addDebugMessage(const QString &message);  // 请求参数值
@@ -223,12 +244,14 @@ private:
     uint32_t buildUpdateCOBId(uint8_t cmdType, uint8_t nodeId);
     void sendCANFrame(uint32_t cobId, const QByteArray& data);
     void sendParameterRead(uint8_t nodeId, uint16_t index, uint8_t subindex);
+    void sendMultiParameterRead(uint8_t nodeId, uint16_t index1, uint8_t subindex1, uint16_t index2, uint8_t subindex2);
     void startStreaming(uint8_t nodeId, const QVector<QPair<uint16_t, uint8_t>>& parameters);
     void stopStreaming(uint8_t nodeId);
 
     // 数据解析函数
     void parseParameterResponse(const VCI_CAN_OBJ &frame);
     void parseStreamData(const VCI_CAN_OBJ &frame);
+    void parseMultiChannelData(const VCI_CAN_OBJ &frame, int startByte, int endByte, uint8_t nodeId);
     double convertParameterValue(uint16_t index, uint8_t subindex, const QByteArray& data) const;
 
     // 数据管理 - addDataPoint函数已删除
@@ -246,12 +269,18 @@ private:
     OscilloscopeWidget *m_oscilloscope;
     QPushButton *m_startStopButton;
     QPushButton *m_clearButton;
+    QPushButton *m_autoModeButton;
     QComboBox *m_channelCountComboBox;
     QComboBox *m_timeRangeComboBox;
     QSpinBox *m_nodeIdSpinBox;
     QCheckBox *m_autoScaleCheckBox;
     QLabel *m_statusLabel;
     QLabel *m_dataRateLabel;
+    
+    // 自动模式控制
+    QDoubleSpinBox *m_minValueSpinBox;
+    QDoubleSpinBox *m_maxValueSpinBox;
+    bool m_autoModeEnabled;
 
     // 通道配置组件
     QVector<QComboBox*> m_categoryComboBoxes;
