@@ -921,6 +921,7 @@ QString ControlParam::getTypeString(ODType type)
     case OD_TYPE_INT16: return "int16";
     case OD_TYPE_UINT16: return "uint16";
     case OD_TYPE_UINT8: return "uint8";
+    case OD_TYPE_UINT32: return "uint32";
     case OD_TYPE_BOOLEAN: return "bool";
     default: return "unknown";
     }
@@ -934,6 +935,7 @@ QString ControlParam::getRangeString(const ODEntry& param)
     case OD_TYPE_INT16:
     case OD_TYPE_UINT16:
     case OD_TYPE_UINT8:
+    case OD_TYPE_UINT32:
         return QString("%1 ~ %2").arg(param.minVal.toInt()).arg(param.maxVal.toInt());
     case OD_TYPE_BOOLEAN:
         return "0 ~ 1";
@@ -950,6 +952,7 @@ QString ControlParam::getDefaultValueString(const ODEntry& param)
     case OD_TYPE_INT16:
     case OD_TYPE_UINT16:
     case OD_TYPE_UINT8:
+    case OD_TYPE_UINT32:
         return QString::number(param.defaultValue.toInt());
     case OD_TYPE_BOOLEAN:
         return param.defaultValue.toBool() ? "true" : "false";
@@ -966,6 +969,7 @@ QString ControlParam::formatValueString(const ODEntry& param, const QVariant& va
     case OD_TYPE_INT16:
     case OD_TYPE_UINT16:
     case OD_TYPE_UINT8:
+    case OD_TYPE_UINT32:
         return QString::number(value.toInt());
     case OD_TYPE_BOOLEAN:
         return value.toBool() ? "1" : "0";
@@ -1146,6 +1150,8 @@ void ControlParam::onSdoReadResponse(const VCI_CAN_OBJ &frame)
         uint16_t v = 0; memcpy(&v, &frame.Data[4], 2); val = static_cast<int>(v);
     } else if (od.type == OD_TYPE_UINT8) {
         uint8_t v = static_cast<uint8_t>(frame.Data[4]); val = static_cast<int>(v);
+    } else if (od.type == OD_TYPE_UINT32) {
+        uint32_t v = 0; memcpy(&v, &frame.Data[4], 4); val = static_cast<int>(v);
     } else if (od.type == OD_TYPE_BOOLEAN) {
         uint8_t v = static_cast<uint8_t>(frame.Data[4]); val = (v != 0);
     } else {
@@ -1171,7 +1177,7 @@ void ControlParam::onSdoReadResponse(const VCI_CAN_OBJ &frame)
         QString text;
         if (od.type == OD_TYPE_FLOAT) {
             text = QString::number(val.toDouble(), 'f', 3);
-        } else if (od.type == OD_TYPE_BOOLEAN || od.type == OD_TYPE_UINT8 || od.type == OD_TYPE_UINT16 || od.type == OD_TYPE_INT16) {
+        } else if (od.type == OD_TYPE_BOOLEAN || od.type == OD_TYPE_UINT8 || od.type == OD_TYPE_UINT16 || od.type == OD_TYPE_INT16 || od.type == OD_TYPE_UINT32) {
             text = QString::number(val.toLongLong());
         } else {
             // 默认按整数显示；如需十六进制可切换为 QString("0x%1").arg(val.toLongLong(), 0, 16).toUpper()
@@ -1304,6 +1310,11 @@ void ControlParam::sendParameterValue(const ODEntry& param, const QVariant& valu
     case OD_TYPE_UINT8: {
         uint8_t uintValue = value.toUInt();
         data = QByteArray(reinterpret_cast<const char*>(&uintValue), sizeof(uint8_t));
+        break;
+    }
+    case OD_TYPE_UINT32: {
+        uint32_t uintValue = value.toUInt();
+        data = QByteArray(reinterpret_cast<const char*>(&uintValue), sizeof(uint32_t));
         break;
     }
     case OD_TYPE_BOOLEAN: {
