@@ -81,6 +81,9 @@ private:
        
     // 数据采集组件
     DataAcquisition *dataAcquisitionWidget;
+    
+    // 控制参数组件
+    ControlParam *controlParamTab;
 
 };
 

@@ -1,10 +1,12 @@
+ 
 #include "can_rx_tx.h"
 #include <QDebug>
 #include <cstring>
 #include <cmath>
 #include "global_vars.h"
 #include <QThread>
-//#include "data_acquisition.h"
+#include "data_acquisition.h"
+#include "control_param.h"
 #include <QElapsedTimer>
 #include <QDateTime>
 #include "can_types.h"
@@ -364,11 +366,30 @@ void CANTxRx::parseAndLogCANFrame(const VCI_CAN_OBJ &frame)
 //                    .arg(frame.DataLen)
 //                    .arg(dataHex);
         
-        if (m_dataAcquisition) {
+        // 只有在示波器采集状态下才解析示波器数据
+        if (m_dataAcquisition && g_oscilloscopeAcquiring == 1) {
             qDebug() << "✅ 数据采集组件存在，正在解析数据上抛协议";
             m_dataAcquisition->parseUpdateProtocol(frame);
-        } else {
+        } else if (!m_dataAcquisition) {
             qDebug() << "❌ 数据采集组件为空，无法处理数据上抛协议";
+        } else {
+            qDebug() << "⏸️ 示波器未采集，跳过数据解析";
+        }
+
+        // 额外分发一份给UI：让控制参数页也能收到0x580-0x5FF的SDO响应
+        // 这样即使当前不在数据采集页，也能更新"当前值"文本框
+       // emit frameReceived(frame);
+        if ( frame.ID >= 0x580 && frame.ID <= 0x5FF) {
+            // 检查m_controlParam是否为空，避免空指针访问导致死机
+            if (m_controlParam) {
+                qDebug() << "✅ 处理当前值";
+                // 使用QMetaObject::invokeMethod确保UI操作在主线程中执行，避免跨线程UI访问导致死机
+                QMetaObject::invokeMethod(m_controlParam, "onSdoReadResponse", 
+                                          Qt::QueuedConnection,
+                                          Q_ARG(VCI_CAN_OBJ, frame));
+            } else {
+                qDebug() << "⚠️ m_controlParam为空，跳过SDO响应处理";
+            }
         }
         return;
     }
@@ -884,6 +905,28 @@ bool CANTxRx::sendParameterData(DWORD nodeId, uint16_t index, uint8_t subindex, 
                  << "子索引: 0x" << QString::number(subindex, 16).toUpper()
                  << "数据:" << data.toHex(' ').toUpper()
                  << "命令:" << QString::number(commandSpecifier, 16).toUpper();
+    }
+
+    return sendCANFrame(canId, sdoData, false);
+}
+
+bool CANTxRx::sendParameterRead(DWORD nodeId, uint16_t index, uint8_t subindex)
+{
+    DWORD canId = 0x600 + nodeId;
+    QByteArray sdoData;
+    sdoData.resize(8);
+    sdoData.fill(0x00);
+
+    // SDO Upload Initiate: 0x40, index little-endian in payload
+    sdoData[0] = static_cast<char>(0x40);
+    sdoData[1] = static_cast<char>(index & 0xFF);
+    sdoData[2] = static_cast<char>((index >> 8) & 0xFF);
+    sdoData[3] = static_cast<char>(subindex);
+
+    if (!m_highSpeedMode) {
+        qDebug() << "发送参数读取 - NodeID:" << nodeId
+                 << "索引: 0x" << QString::number(index, 16).toUpper()
+                 << "子索引: 0x" << QString::number(subindex, 16).toUpper();
     }
 
     return sendCANFrame(canId, sdoData, false);

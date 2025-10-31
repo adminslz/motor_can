@@ -154,6 +154,14 @@ void ParamDictionary::initializeDictionary()
     m_dictionary.append({0x6412, 0x00, OD_TYPE_FLOAT, "Q轴电压", "V", -50.0f, 50.0f, 0.0f, true, false, 7, "电流控制"});
     m_dictionary.append({0x6413, 0x00, OD_TYPE_FLOAT, "Alpha轴电压", "V", -50.0f, 50.0f, 0.0f, true, false, 7, "电流控制"});
     m_dictionary.append({0x6414, 0x00, OD_TYPE_FLOAT, "Beta轴电压", "V", -50.0f, 50.0f, 0.0f, true, false, 7, "电流控制"});
+
+    // =============== 追加：与下位机一致的新增条目（仅新增，不修改已有） ===============
+    // 设备类型
+    m_dictionary.append({0x1000, 0x00, OD_TYPE_UINT32, "Device_Type", "", 0, 0, 0, true, false, 4, "系统状态"});
+
+    // 参数保存/恢复控制位
+    m_dictionary.append({0x6145, 0x00, OD_TYPE_UINT32, "Param_Save", "", 0, 1, 0, true, true, 4, "参数控制"});
+    m_dictionary.append({0x6146, 0x00, OD_TYPE_UINT32, "Param_Restore", "", 0, 1, 0, true, true, 4, "参数控制"});
 }
 
 QVector<ODEntry> ParamDictionary::getParametersByCategory(int category) const

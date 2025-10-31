@@ -259,6 +259,8 @@ void ControlParam::setupUI()
         QVBoxLayout *tabLayout = new QVBoxLayout(tabWidget);
         tabLayout->setSpacing(20);
         tabLayout->setContentsMargins(25, 20, 25, 20);
+        // 顶部对齐，宽度按容器扩展
+        tabLayout->setAlignment(Qt::AlignTop);
 
         m_tabWidget->addTab(scrollArea, QString::number(i));
         scrollArea->setWidget(tabWidget);
@@ -306,7 +308,7 @@ void ControlParam::setupUI()
         "}"
     );
 
-    QPushButton *applyBtn = new QPushButton("▷ 应用参数");
+    QPushButton *applyBtn = new QPushButton("💾 保存参数");
     QPushButton *readBtn = new QPushButton("↻ 读取所有");
     QPushButton *resetBtn = new QPushButton("↺ 恢复默认");
     QPushButton *saveBtn = new QPushButton("💾 保存配置");
@@ -372,7 +374,7 @@ void ControlParam::setupUI()
     connect(resetBtn, &QPushButton::clicked, this, &ControlParam::onResetParamsClicked);
     connect(saveBtn, &QPushButton::clicked, this, &ControlParam::onSaveParamsClicked);
     connect(loadBtn, &QPushButton::clicked, this, &ControlParam::onLoadParamsClicked);
-    connect(m_autoApplyCheck, &QCheckBox::toggled, this, &ControlParam::onAutoApplyToggled);
+   // connect(m_autoApplyCheck, &QCheckBox::toggled, this, &ControlParam::onAutoApplyToggled);
 }
 
 // 获取参数单位的辅助函数
@@ -466,6 +468,10 @@ void ControlParam::createParameterControls()
                 "    border-radius: 6px;"
                 "}"
             );
+            // 让容器横向扩展，占满一行
+            groupBox->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+            groupBox->setMinimumWidth(0);
+            groupBox->setMaximumWidth(QWIDGETSIZE_MAX);
 
             QVBoxLayout *groupLayout = new QVBoxLayout(groupBox);
             groupLayout->setSpacing(12);
@@ -515,6 +521,13 @@ QWidget* ControlParam::createParameterWidget(const ODEntry& param)
     layout->setVerticalSpacing(8);
     layout->setHorizontalSpacing(15);
     layout->setContentsMargins(8, 8, 8, 8);
+    // 统一列宽，确保跨容器也对齐
+    layout->setColumnMinimumWidth(0, 220); // 名称
+    layout->setColumnMinimumWidth(1, 120); // 输入控件
+    layout->setColumnMinimumWidth(2, 60);  // 单位
+    layout->setColumnMinimumWidth(3, 80);  // “当前值:” 字样
+    layout->setColumnMinimumWidth(4, 12);  // 间距Spacer
+    layout->setColumnMinimumWidth(5, 100); // 当前值显示
 
     // 第一行：参数名称和输入控件
     QLabel *nameLabel = new QLabel(param.name + ":");
@@ -526,24 +539,31 @@ QWidget* ControlParam::createParameterWidget(const ODEntry& param)
         "    padding: 4px 0px;"
         "}"
     );
+    // 统一列宽：名称列
+    nameLabel->setMinimumWidth(220);
+    nameLabel->setMaximumWidth(220);
 
     QWidget *control = createControlForParameter(param);
+    // 统一列宽：输入控件列
+    if (auto *w = qobject_cast<QDoubleSpinBox*>(control)) { w->setFixedWidth(120); }
+    else if (auto *w2 = qobject_cast<QSpinBox*>(control)) { w2->setFixedWidth(120); }
+    else if (auto *w3 = qobject_cast<QCheckBox*>(control)) { w3->setFixedWidth(120); }
+    else if (auto *w4 = qobject_cast<QComboBox*>(control)) { w4->setFixedWidth(120); }
 
-    // 获取单位
+    // 获取单位（没有单位也放占位符“-”以保证对齐）
     QString unit = getUnitString(param);
-    QLabel *unitLabel = nullptr;
-
-    if (!unit.isEmpty()) {
-        unitLabel = new QLabel(unit);
-        unitLabel->setStyleSheet(
-            "QLabel {"
-            "    font-size: 14px;"
-            "    color: #aaaaaa;"
-            "    padding: 4px 0px;"
-            "    margin-left: 5px;"
-            "}"
-        );
-    }
+    QLabel *unitLabel = new QLabel(unit.isEmpty() ? "-" : unit);
+    unitLabel->setStyleSheet(
+        "QLabel {"
+        "    font-size: 14px;"
+        "    color: #aaaaaa;"
+        "    padding: 4px 0px;"
+        "    margin-left: 5px;"
+        "}"
+    );
+    // 统一列宽：单位列
+    unitLabel->setMinimumWidth(60);
+    unitLabel->setMaximumWidth(60);
 
     // 第二行：详细信息
     QWidget *infoWidget = new QWidget();
@@ -580,15 +600,61 @@ QWidget* ControlParam::createParameterWidget(const ODEntry& param)
     infoLayout->addWidget(defaultLabel);
     infoLayout->addStretch();
 
-    // 第一行布局：名称 + 输入框 + 单位
+    // 读取值显示（当前值，右侧可编辑文本框）
+    QLineEdit *currentValueEdit = new QLineEdit("0");
+    currentValueEdit->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    currentValueEdit->setStyleSheet(
+        "QLineEdit {"
+        "    background: transparent;"
+        "    color: #ffffff;"
+        "    border: none;"
+        "    border-bottom: 2px solid #777;"
+        "    padding: 6px 0px;"
+        "    font-size: 16px;"
+        "    min-width: 120px;"
+        "    max-width: 160px;"
+        "}"
+    );
+    // 绑定索引，便于快速定位
+    currentValueEdit->setProperty("paramIndex", param.index);
+    currentValueEdit->setProperty("paramSubindex", param.subindex);
+    currentValueEdit->setObjectName(QString("%1-%2")
+        .arg(param.index, 4, 16, QChar('0'))
+        .arg(param.subindex, 2, 16, QChar('0')).toLower());
+
+    // 保存到映射，key: index-sub
+    QString key = QString("%1-%2").arg(param.index, 4, 16, QChar('0'))
+                                  .arg(param.subindex, 2, 16, QChar('0'));
+    m_currentValueMap[key] = currentValueEdit;
+
+    // 第一行布局：名称 + 输入框 + 单位 + 当前值
     layout->addWidget(nameLabel, 0, 0);
     layout->addWidget(control, 0, 1);
-    if (unitLabel) {
-        layout->addWidget(unitLabel, 0, 2);
+    int col = 2;
+    layout->addWidget(unitLabel, 0, col++);
+    {
+        QLabel *currLabel = new QLabel("当前值:");
+        currLabel->setStyleSheet(
+            "QLabel {"
+            "    font-weight: bold;"
+            "    font-size: 18px;"
+            "    color: #dddddd;"
+            "    padding: 4px 0px;"
+            "    margin-right: 10px;"
+            "}"
+        );
+        // 统一列宽：“当前值”标签列
+        currLabel->setMinimumWidth(80);
+        currLabel->setMaximumWidth(80);
+        layout->addWidget(currLabel, 0, col++);
     }
+    // 固定间距Spacer列
+    layout->addItem(new QSpacerItem(12, 1, QSizePolicy::Fixed, QSizePolicy::Minimum), 0, col++);
+    // “当前值”显示放在下一列
+    layout->addWidget(currentValueEdit, 0, col++);
 
     // 第二行：详细信息
-    layout->addWidget(infoWidget, 1, 0, 1, unitLabel ? 3 : 2);
+    layout->addWidget(infoWidget, 1, 0, 1, col);
 
     return paramWidget;
 }
@@ -892,6 +958,22 @@ QString ControlParam::getDefaultValueString(const ODEntry& param)
     }
 }
 
+QString ControlParam::formatValueString(const ODEntry& param, const QVariant& value)
+{
+    switch (param.type) {
+    case OD_TYPE_FLOAT:
+        return QString::number(value.toDouble(), 'f', 3);
+    case OD_TYPE_INT16:
+    case OD_TYPE_UINT16:
+    case OD_TYPE_UINT8:
+        return QString::number(value.toInt());
+    case OD_TYPE_BOOLEAN:
+        return value.toBool() ? "1" : "0";
+    default:
+        return value.toString();
+    }
+}
+
 void ControlParam::setupConnections()
 {
     if (m_motorEnableCheck) {
@@ -901,6 +983,8 @@ void ControlParam::setupConnections()
         connect(m_controlModeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
                 this, &ControlParam::onControlModeChanged);
     }
+
+    // （回填交由 MainWindow 统一处理）
 }
 
 void ControlParam::setCanId(uint8_t canId)
@@ -917,105 +1001,205 @@ void ControlParam::updateParameterValue(uint16_t index, uint8_t subindex, const 
 {
     QString key = QString("%1-%2").arg(index, 4, 16, QChar('0'))
                                  .arg(subindex, 2, 16, QChar('0'));
+    qDebug() << "[ControlParam] updateParameterValue key=" << key
+             << " exists=" << m_currentValueMap.contains(key)
+             << " val=" << value;
 
-    if (m_controlMap.contains(key)) {
-        QWidget *control = m_controlMap[key];
+//    if (m_controlMap.contains(key)) {
+//        QWidget *control = m_controlMap[key];
 
-        // 阻塞信号防止循环触发
-        if (QDoubleSpinBox *spinBox = qobject_cast<QDoubleSpinBox*>(control)) {
-            spinBox->blockSignals(true);
-            spinBox->setValue(value.toDouble());
-            spinBox->blockSignals(false);
-        } else if (QSpinBox *spinBox = qobject_cast<QSpinBox*>(control)) {
-            spinBox->blockSignals(true);
-            spinBox->setValue(value.toInt());
-            spinBox->blockSignals(false);
-        } else if (QCheckBox *checkBox = qobject_cast<QCheckBox*>(control)) {
-            checkBox->blockSignals(true);
-            checkBox->setChecked(value.toBool());
-            checkBox->blockSignals(false);
-        }
+//        // 阻塞信号防止循环触发
+//        if (QDoubleSpinBox *spinBox = qobject_cast<QDoubleSpinBox*>(control)) {
+//            spinBox->blockSignals(true);
+//            spinBox->setValue(value.toDouble());
+//            spinBox->blockSignals(false);
+//        } else if (QSpinBox *spinBox = qobject_cast<QSpinBox*>(control)) {
+//            spinBox->blockSignals(true);
+//            spinBox->setValue(value.toInt());
+//            spinBox->blockSignals(false);
+//        } else if (QCheckBox *checkBox = qobject_cast<QCheckBox*>(control)) {
+//            checkBox->blockSignals(true);
+//            checkBox->setChecked(value.toBool());
+//            checkBox->blockSignals(false);
+//        }
+//    }
+
+    // 更新当前值显示
+    if (m_currentValueMap.contains(key)) {
+        QLineEdit *edit = m_currentValueMap[key];
+        ODEntry param = m_paramDict.getParameter(index, subindex);
+        edit->setText(formatValueString(param, value));
+    } else {
+        qDebug() << "[ControlParam] no currentValue widget for" << key;
     }
 }
 
 void ControlParam::onApplyParamsClicked()
 {
-    // 应用所有可写参数的当前值
-    int appliedCount = 0;
-    for (auto it = m_controlMap.begin(); it != m_controlMap.end(); ++it) {
-        QWidget *control = it.value();
-        uint16_t index = control->property("paramIndex").toUInt();
-        uint8_t subindex = control->property("paramSubindex").toUInt();
+    // 保存参数：写 0x6145.00 = 1
+    int ret = QMessageBox::question(this, "确认保存", "是否保存参数到设备?", QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (ret != QMessageBox::Yes) return;
 
-        ODEntry param = m_paramDict.getParameter(index, subindex);
-        if (param.writable) {
-            QVariant value;
-            if (QDoubleSpinBox *spinBox = qobject_cast<QDoubleSpinBox*>(control)) {
-                value = spinBox->value();
-            } else if (QSpinBox *spinBox = qobject_cast<QSpinBox*>(control)) {
-                value = spinBox->value();
-            } else if (QCheckBox *checkBox = qobject_cast<QCheckBox*>(control)) {
-                value = checkBox->isChecked();
-            }
-
-            sendParameterValue(param, value);
-            appliedCount++;
-        }
+    ODEntry saveEntry = m_paramDict.getParameter(0x6145, 0x00);
+    if (saveEntry.index == 0) {
+        // fallback 构造
+        saveEntry.index = 0x6145;
+        saveEntry.subindex = 0x00;
+        saveEntry.type = OD_TYPE_UINT32;
+        saveEntry.name = "Param_Save";
+        saveEntry.readable = true;
+        saveEntry.writable = true;
     }
-
-    QMessageBox::information(this, "提示", QString("已应用 %1 个参数到电机").arg(appliedCount));
+    sendParameterValue(saveEntry, 1);
+    QMessageBox::information(this, "提示", "保存命令已下发 (0x6145.00 = 1)");
 }
 
 void ControlParam::onReadAllParamsClicked()
 {
-    // 读取所有参数
-    QVector<ODEntry> allParams = m_paramDict.getAllParameters();
-    int readCount = 0;
-    for (const auto& param : allParams) {
-        if (param.readable) {
-            emit sdoReadRequest(m_currentCanId, param.index, param.subindex);
-            readCount++;
+    // 仅读取右侧三类（基本控制、PID参数、高级设置），这些行在UI存在，才能回填“当前值”
+    m_readQueue.clear();
+    for (int cat = 0; cat < 3; ++cat) {
+        QVector<ODEntry> params = m_paramDict.getParametersByCategory(cat);
+        for (const auto &p : params) {
+            if (p.readable) m_readQueue.append(p);
         }
     }
+    m_readIndex = 0;
 
-    QMessageBox::information(this, "提示", QString("已发送 %1 个参数读取请求").arg(readCount));
+    if (m_readQueue.isEmpty()) {
+        QMessageBox::information(this, "提示", "无可读取参数");
+        return;
+    }
+
+    if (!m_readAllTimer) {
+        m_readAllTimer = new QTimer(this);
+        m_readAllTimer->setInterval(50);
+        connect(m_readAllTimer, &QTimer::timeout, this, &ControlParam::onReadAllTick);
+    }
+
+    if (m_readProgress) {
+        m_readProgress->close();
+        m_readProgress->deleteLater();
+    }
+    m_readProgress = new QProgressDialog("正在读取参数...", QString(), 0, m_readQueue.size(), this);
+    m_readProgress->setWindowModality(Qt::ApplicationModal);
+    m_readProgress->setCancelButton(nullptr);
+    m_readProgress->setMinimumDuration(0);
+    m_readProgress->setValue(0);
+
+    m_readAllTimer->start();
+}
+
+void ControlParam::onReadAllTick()
+{
+    qDebug() << "[ControlParam] onReadAllTick fired, idx=" << m_readIndex << "/" << m_readQueue.size();
+    if (m_readIndex >= m_readQueue.size()) {
+        m_readAllTimer->stop();
+        if (m_readProgress) {
+            m_readProgress->setValue(m_readQueue.size());
+            m_readProgress->close();
+            m_readProgress->deleteLater();
+            m_readProgress = nullptr;
+        }
+        QMessageBox::information(this, "提示", "参数读取完成");
+        return;
+    }
+
+    m_currentCanId = Can_id;
+    const ODEntry &param = m_readQueue[m_readIndex];
+    qDebug() << "[ControlParam] Request read SDO idx=0x" << QString::number(param.index,16)
+             << " sub=0x" << QString::number(param.subindex,16)
+             << " nodeId=" << m_currentCanId;
+    emit sdoReadRequest(m_currentCanId, param.index, param.subindex);
+    // 直接下发（兜底），防止上层未连接该信号
+    if (g_canTxRx && g_canTxRx->isDeviceReady()) {
+        g_canTxRx->sendParameterRead(m_currentCanId, param.index, param.subindex);
+    } else {
+        qDebug() << "[ControlParam] g_canTxRx not ready, cannot directly send";
+    }
+    if (m_readProgress) m_readProgress->setValue(m_readIndex + 1);
+    m_readIndex++;
+}
+
+void ControlParam::onSdoReadResponse(const VCI_CAN_OBJ &frame)
+{
+    // 仅处理SDO上传响应: 0x580 + nodeId, 长度≥8
+    if ((frame.ID & 0xF80) != 0x580 || frame.DataLen < 8) {
+        return;
+    }
+ qDebug() << "✅ 处理SdoReadResponse";
+    uint8_t cs = static_cast<uint8_t>(frame.Data[0]);
+   // Q_UNUSED(cs);
+    uint16_t index = static_cast<uint8_t>(frame.Data[1]) | (static_cast<uint8_t>(frame.Data[2]) << 8);
+    uint8_t sub = static_cast<uint8_t>(frame.Data[3]);
+
+    ODEntry od = m_paramDict.getParameter(index, sub);
+    QVariant val;
+
+    if (od.type == OD_TYPE_FLOAT) {
+        float f = 0.0f;
+        memcpy(&f, &frame.Data[4], 4);
+        val = static_cast<double>(f);
+    } else if (od.type == OD_TYPE_INT16) {
+        int16_t v = 0; memcpy(&v, &frame.Data[4], 2); val = static_cast<int>(v);
+    } else if (od.type == OD_TYPE_UINT16) {
+        uint16_t v = 0; memcpy(&v, &frame.Data[4], 2); val = static_cast<int>(v);
+    } else if (od.type == OD_TYPE_UINT8) {
+        uint8_t v = static_cast<uint8_t>(frame.Data[4]); val = static_cast<int>(v);
+    } else if (od.type == OD_TYPE_BOOLEAN) {
+        uint8_t v = static_cast<uint8_t>(frame.Data[4]); val = (v != 0);
+    } else {
+        int32_t v = 0; memcpy(&v, &frame.Data[4], 4); val = static_cast<int>(v);
+    }
+
+    // 兜底：直接回填到对应的“当前值”文本框
+    QString key = QString("%1-%2").arg(index, 4, 16, QChar('0')).arg(sub, 2, 16, QChar('0')).toLower();
+    QLineEdit* edit = nullptr;
+    if (m_currentValueMap.contains(key)) {
+        edit = m_currentValueMap[key];
+    } else {
+        // 通过属性匹配，避免key大小写或映射未命中问题
+        const auto edits = this->findChildren<QLineEdit*>();
+        for (auto* e : edits) {
+            if (e->property("paramIndex").toUInt() == index &&
+                e->property("paramSubindex").toUInt() == sub) {
+                edit = e; break;
+            }
+        }
+    }
+    if (edit) {
+        QString text;
+        if (od.type == OD_TYPE_FLOAT) {
+            text = QString::number(val.toDouble(), 'f', 3);
+        } else if (od.type == OD_TYPE_BOOLEAN || od.type == OD_TYPE_UINT8 || od.type == OD_TYPE_UINT16 || od.type == OD_TYPE_INT16) {
+            text = QString::number(val.toLongLong());
+        } else {
+            // 默认按整数显示；如需十六进制可切换为 QString("0x%1").arg(val.toLongLong(), 0, 16).toUpper()
+            text = QString::number(val.toLongLong());
+        }
+        edit->setText(text);
+    }
+
+    // 保持原有路径，更新右侧控件映射与其它逻辑
+    updateParameterValue(index, sub, val);
 }
 
 void ControlParam::onResetParamsClicked()
 {
-    int ret = QMessageBox::question(this, "确认", "确定要恢复默认参数吗？");
-    if (ret == QMessageBox::Yes) {
-        // 重置所有参数到默认值
-        int resetCount = 0;
-        for (auto it = m_controlMap.begin(); it != m_controlMap.end(); ++it) {
-            QWidget *control = it.value();
-            uint16_t index = control->property("paramIndex").toUInt();
-            uint8_t subindex = control->property("paramSubindex").toUInt();
+    int ret = QMessageBox::question(this, "确认", "确定要恢复默认参数吗？", QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (ret != QMessageBox::Yes) return;
 
-            ODEntry param = m_paramDict.getParameter(index, subindex);
-            QVariant defaultValue = param.defaultValue;
-
-            // 阻塞信号防止触发发送
-            if (QDoubleSpinBox *spinBox = qobject_cast<QDoubleSpinBox*>(control)) {
-                spinBox->blockSignals(true);
-                spinBox->setValue(defaultValue.toDouble());
-                spinBox->blockSignals(false);
-                resetCount++;
-            } else if (QSpinBox *spinBox = qobject_cast<QSpinBox*>(control)) {
-                spinBox->blockSignals(true);
-                spinBox->setValue(defaultValue.toInt());
-                spinBox->blockSignals(false);
-                resetCount++;
-            } else if (QCheckBox *checkBox = qobject_cast<QCheckBox*>(control)) {
-                checkBox->blockSignals(true);
-                checkBox->setChecked(defaultValue.toBool());
-                checkBox->blockSignals(false);
-                resetCount++;
-            }
-        }
-
-        QMessageBox::information(this, "提示", QString("已重置 %1 个参数为默认值").arg(resetCount));
+    ODEntry restoreEntry = m_paramDict.getParameter(0x6146, 0x00);
+    if (restoreEntry.index == 0) {
+        restoreEntry.index = 0x6146;
+        restoreEntry.subindex = 0x00;
+        restoreEntry.type = OD_TYPE_UINT32;
+        restoreEntry.name = "Param_Restore";
+        restoreEntry.readable = true;
+        restoreEntry.writable = true;
     }
+    sendParameterValue(restoreEntry, 1);
+    QMessageBox::information(this, "提示", "恢复默认命令已下发 (0x6146.00 = 1)");
 }
 
 void ControlParam::onSaveParamsClicked()
@@ -1130,7 +1314,7 @@ void ControlParam::sendParameterValue(const ODEntry& param, const QVariant& valu
     default:
         return;
     }
-
+    m_currentCanId = Can_id;
     // 使用CAN通信发送参数数据
     if (g_canTxRx && g_canTxRx->isDeviceReady()) {
         bool success = g_canTxRx->sendParameterData(m_currentCanId, param.index, param.subindex, data);

@@ -2,6 +2,7 @@
 #define CAN_RX_TX_H
 
 #include <QObject>
+#include <QMetaType>
 #include <QTimer>
 #include <QMutex>
 #include <QElapsedTimer>
@@ -10,7 +11,7 @@
 #include <QWaitCondition>
 #include "ControlCAN.h"  // 包含原始头文件
 #include "data_acquisition.h"
-
+#include "control_param.h"
 class DataAcquisition;
 class CANThread;
 
@@ -62,6 +63,7 @@ public:
     }
 
     bool sendParameterData(DWORD nodeId, uint16_t index, uint8_t subindex, const QByteArray& data);
+    bool sendParameterRead(DWORD nodeId, uint16_t index, uint8_t subindex);
     void setCANParams(DWORD deviceType, DWORD deviceIndex, DWORD canIndex);
     bool sendCANFrame(DWORD canId, const QByteArray &data, bool extendedFrame = false);
     bool sendCANFrame(const VCI_CAN_OBJ &frame);
@@ -164,6 +166,12 @@ private:
     int m_receiveCount;
     qint64 m_lastLogTime;
     double m_currentFPS;
+
+    // 直接通知控制参数界面的指针，由上层在MainWindow中设置
+public:
+    void setControlParam(class ControlParam* ctrl) { m_controlParam = ctrl; }
+private:
+    class ControlParam* m_controlParam { nullptr };
 };
 
 extern CANTxRx *g_canTxRx;

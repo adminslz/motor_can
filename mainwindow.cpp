@@ -82,20 +82,23 @@ MainWindow::MainWindow(QWidget *parent)
     , motorDebug(nullptr)
     , onlineStatusLabel(nullptr)
     , onlineStatusWidget(nullptr)
+    , dataAcquisitionWidget(nullptr)
+    , controlParamTab(nullptr)
 {
     qDebug() << "========== MainWindow 构造函数开始 ==========";
     //ui->setupUi(this);
 
-    // 初始化调试日志系统
-    qDebug() << "【MainWindow】初始化调试日志系统...";
-    motorDebug = new MotorDebug(this);
-    g_motorDebug = motorDebug;
-    qDebug() << "【MainWindow】调试日志系统初始化完成";
+    // 已删除调试日志系统，不再初始化
+    // qDebug() << "【MainWindow】初始化调试日志系统...";
+    // motorDebug = new MotorDebug(this);
+    // g_motorDebug = motorDebug;
+    // qDebug() << "【MainWindow】调试日志系统初始化完成";
 
     // 创建菜单栏和堆叠窗口
-    qDebug() << "【MainWindow】创建菜单栏...";
-    createMenuBar();
-    qDebug() << "【MainWindow】菜单栏创建完成";
+    // 已删除菜单栏，不再创建
+    // qDebug() << "【MainWindow】创建菜单栏...";
+    // createMenuBar();
+    // qDebug() << "【MainWindow】菜单栏创建完成";
     
     qDebug() << "【MainWindow】创建堆叠窗口...";
     createStackedWidget();
@@ -240,7 +243,7 @@ void MainWindow::setupUI()
     qDebug() << "【MainWindow】运动控制选项卡创建成功";
     
     qDebug() << "【MainWindow】创建控制参数选项卡...";
-    ControlParam *controlParamTab = new ControlParam();
+    controlParamTab = new ControlParam();
     qDebug() << "【MainWindow】控制参数选项卡创建成功";
     
     qDebug() << "【MainWindow】创建电机参数选项卡...";
@@ -251,11 +254,8 @@ void MainWindow::setupUI()
     dataAcquisitionWidget = new DataAcquisition();
     qDebug() << "【MainWindow】数据采集选项卡创建成功";
     
-    // 设置CAN组件
-    if (dataAcquisitionWidget && g_canTxRx) {
-        dataAcquisitionWidget->setCANTxRx(g_canTxRx);
-        qDebug() << "【MainWindow】CAN组件已设置到数据采集";
-    }
+    // 注意：CAN组件的设置会在setupDataAcquisition()中进行
+    // 因为在setupUI()调用时，g_canTxRx可能还未创建
 
     // 添加选项卡
     qDebug() << "【MainWindow】开始添加选项卡到TabWidget...";
@@ -270,6 +270,46 @@ void MainWindow::setupUI()
     
     tabWidget->addTab(dataAcquisitionWidget, "数据采集");
     qDebug() << "【MainWindow】数据采集选项卡已添加";
+    
+    // 设置默认选项卡为"控制参数"（索引1）
+    tabWidget->setCurrentIndex(1);
+    qDebug() << "【MainWindow】默认选项卡已设置为: 控制参数";
+
+//    // 连接控制参数与CAN发送（读取）
+//    if (g_canTxRx && controlParamTab) {
+//        connect(controlParamTab, &ControlParam::sdoReadRequest, this, [=](uint8_t nodeId, uint16_t index, uint8_t subindex){
+//            g_canTxRx->sendParameterRead(nodeId, index, subindex);
+//        });
+    // 订阅CAN帧以解析SDO读取响应并回填到控制参数界面（主线程队列调用）
+//        connect(g_canTxRx, &CANTxRx::frameReceived, this, [=](const VCI_CAN_OBJ &frame){
+//            if ((frame.ID & 0xF80) != 0x580 || frame.DataLen < 8) return;
+
+//            uint16_t index = static_cast<uint8_t>(frame.Data[1]) | (static_cast<uint8_t>(frame.Data[2]) << 8);
+//            uint8_t sub = static_cast<uint8_t>(frame.Data[3]);
+//            ODEntry od = controlParamTab->getParam(index, sub);
+
+//            QVariant val;
+//            if (od.type == OD_TYPE_FLOAT) {
+//                float f = 0.0f; memcpy(&f, &frame.Data[4], 4); val = static_cast<double>(f);
+//            } else if (od.type == OD_TYPE_INT16) {
+//                int16_t v = 0; memcpy(&v, &frame.Data[4], 2); val = static_cast<int>(v);
+//            } else if (od.type == OD_TYPE_UINT16) {
+//                uint16_t v = 0; memcpy(&v, &frame.Data[4], 2); val = static_cast<int>(v);
+//            } else if (od.type == OD_TYPE_UINT8) {
+//                uint8_t v = static_cast<uint8_t>(frame.Data[4]); val = static_cast<int>(v);
+//            } else if (od.type == OD_TYPE_BOOLEAN) {
+//                uint8_t v = static_cast<uint8_t>(frame.Data[4]); val = (v != 0);
+//            } else {
+//                int32_t v = 0; memcpy(&v, &frame.Data[4], 4); val = static_cast<int>(v);
+//            }
+
+//            QMetaObject::invokeMethod(controlParamTab, [=]{
+//                controlParamTab->updateParameterValue(index, sub, val);
+//            }, Qt::QueuedConnection);
+//        });
+
+//        // 保留统一回填路径（不直接连接到ControlParam槽）
+//    }
 
     // 添加到主布局
     qDebug() << "【MainWindow】开始添加控件到主布局...";
@@ -279,11 +319,7 @@ void MainWindow::setupUI()
     mainLayout->addWidget(tabWidget, 1);     // 选项卡区域（占据大部分空间）
     qDebug() << "【MainWindow】TabWidget已添加";
 
-    // 添加系统日志控件到底部
-    if (motorDebug) {
-        mainLayout->addWidget(motorDebug->getLogWidget());
-        qDebug() << "【MainWindow】系统日志控件已添加";
-    }
+    // 已删除系统日志控件，不再添加
 
     setCentralWidget(centralWidget);
     qDebug() << "【MainWindow】中央控件已设置";
@@ -446,6 +482,11 @@ void MainWindow::setCANConfig(int deviceIndex, int baudRate, int canId, bool ext
     QTimer::singleShot(1000, this, [this]() {
         updateOnlineStatus(true);
     });
+
+//    // 告知底层，直接回调控制参数页槽函数（类似 parseUpdateProtocol 的直接调用）
+//    if (g_canTxRx) {
+//        g_canTxRx->setControlParam(controlParamTab);
+//    }
 }
 
 // 在打开设备的地方更新在线状态
@@ -761,6 +802,19 @@ void MainWindow::setupDataAcquisition()
             qDebug() << "❌ 全局CANTxRx为空，无法设置数据采集组件";
         }
     }
+    
+    // 设置ControlParam到CANTxRx，用于接收SDO响应（在g_canTxRx创建后调用）
+    if (controlParamTab && g_canTxRx) {
+        g_canTxRx->setControlParam(controlParamTab);
+        qDebug() << "✅ ControlParam已设置到CANTxRx，可以接收SDO响应";
+    } else {
+        if (!controlParamTab) {
+            qDebug() << "❌ ControlParam组件为空，无法设置";
+        }
+        if (!g_canTxRx) {
+            qDebug() << "❌ 全局CANTxRx为空，无法设置ControlParam";
+        }
+    }
 }
 
 void MainWindow::setCANThread(CANThread* thread)
@@ -791,11 +845,11 @@ MainWindow::~MainWindow()
         dataAcquisitionWidget = nullptr;
     }
     
-    // 清理调试日志系统
-    if (motorDebug) {
-        delete motorDebug;
-        motorDebug = nullptr;
-    }
+    // 已删除调试日志系统，不再清理
+    // if (motorDebug) {
+    //     delete motorDebug;
+    //     motorDebug = nullptr;
+    // }
     
     // 清理UI组件
     if (ui) {

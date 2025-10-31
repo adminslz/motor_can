@@ -1,3 +1,4 @@
+
 #include "data_acquisition.h"
 #include <QDebug>
 #include <QByteArray>
@@ -27,6 +28,7 @@
 #include <limits>
 #include <iterator>
 #include "can_rx_tx.h"
+#include "global_vars.h"
 
 // 添加类型定义
 #ifndef uint8_t
@@ -2121,6 +2123,10 @@ void DataAcquisition::startAcquisition()
 
     m_isAcquiring = true;
     
+    // 设置全局变量，允许示波器数据解析
+    g_oscilloscopeAcquiring = 1;
+    qDebug() << "【采集】全局变量g_oscilloscopeAcquiring已设置为1，允许示波器数据解析";
+    
     // 只有在第一次采集或数据被清空后才设置起始时间
     if (m_startTime <= 0) {
         m_startTime = QDateTime::currentDateTime().toMSecsSinceEpoch() / 1000.0;
@@ -2205,6 +2211,10 @@ void DataAcquisition::stopAcquisition()
     }
 
         m_isAcquiring = false;
+    
+    // 设置全局变量，禁止示波器数据解析
+    g_oscilloscopeAcquiring = 0;
+    qDebug() << "【采集】全局变量g_oscilloscopeAcquiring已设置为0，禁止示波器数据解析";
         
     // 停止定时器
     m_plotUpdateTimer->stop();
