@@ -1,6 +1,7 @@
 #include "motion_control.h"
 #include <QSpacerItem>
 #include <QDebug>
+#include "can_rx_tx.h"
 
 MotionControl::MotionControl(QWidget *parent)
     : QWidget(parent)
@@ -12,6 +13,23 @@ MotionControl::MotionControl(QWidget *parent)
     , motorStatus(new MotorStatus(this))
 {
     setupUI();
+    // 不在这里连接，因为g_canTxRx可能还未创建
+    // 连接会在setupConnections()中完成
+}
+
+void MotionControl::setupConnections()
+{
+    // 连接CAN状态数据到电机状态显示
+    if (g_canTxRx) {
+        connect(g_canTxRx, &CANTxRx::statusDataReceived, this, [this](DWORD canId, float speed, float position, float current) {
+            motorStatus->updateCurrentSpeed(speed);
+            motorStatus->updateCurrentPosition(position);
+            motorStatus->updateCurrentCurrent(current);
+        }, Qt::QueuedConnection);
+        qDebug() << "✅ MotionControl: CAN状态数据已连接到电机状态显示";
+    } else {
+        qDebug() << "⚠️ MotionControl: g_canTxRx为空，无法连接状态数据";
+    }
 }
 
 void MotionControl::setupUI()

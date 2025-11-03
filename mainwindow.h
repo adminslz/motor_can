@@ -84,6 +84,9 @@ private:
     
     // 控制参数组件
     ControlParam *controlParamTab;
+    
+    // 运动控制组件
+    MotionControl *motionControlTab;
 
 };
 

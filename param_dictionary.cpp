@@ -17,6 +17,9 @@ void ParamDictionary::initializeDictionary()
 
     // 位置控制
     m_dictionary.append({0x6062, 0x00, OD_TYPE_FLOAT, "目标位置", "rad", -12.57f, 12.57f, 0.0f, false, true, 0, "位置控制"});
+    m_dictionary.append({0x6069, 0x00, OD_TYPE_FLOAT, "位置上限", "rad", -12.57f, 12.57f, 12.57f, true, true, 0, "位置控制"});
+    m_dictionary.append({0x6069, 0x01, OD_TYPE_FLOAT, "位置下限", "rad", -12.57f, 12.57f, -12.57f, true, true, 0, "位置控制"});
+    m_dictionary.append({0x606A, 0x00, OD_TYPE_FLOAT, "位置输出零点", "rad", -12.57f, 12.57f, 0.0f, true, true, 0, "位置控制"});
 
     // 速度控制
     m_dictionary.append({0x606B, 0x00, OD_TYPE_FLOAT, "目标速度", "rad/s", -15.0f, 15.0f, 0.0f, false, true, 0, "速度控制"});

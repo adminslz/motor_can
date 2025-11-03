@@ -84,6 +84,7 @@ MainWindow::MainWindow(QWidget *parent)
     , onlineStatusWidget(nullptr)
     , dataAcquisitionWidget(nullptr)
     , controlParamTab(nullptr)
+    , motionControlTab(nullptr)
 {
     qDebug() << "========== MainWindow 构造函数开始 ==========";
     //ui->setupUi(this);
@@ -239,7 +240,7 @@ void MainWindow::setupUI()
     qDebug() << "========== 开始创建选项卡 ==========";
     
     qDebug() << "【MainWindow】创建运动控制选项卡...";
-    MotionControl *motionControlTab = new MotionControl();
+    motionControlTab = new MotionControl();
     qDebug() << "【MainWindow】运动控制选项卡创建成功";
     
     qDebug() << "【MainWindow】创建控制参数选项卡...";
@@ -813,6 +814,20 @@ void MainWindow::setupDataAcquisition()
         }
         if (!g_canTxRx) {
             qDebug() << "❌ 全局CANTxRx为空，无法设置ControlParam";
+        }
+    }
+    
+    // 设置MotionControl的信号连接，用于更新电机状态显示（在g_canTxRx创建后调用）
+    if (motionControlTab && g_canTxRx) {
+        // 连接已经在MotionControl::setupConnections()中建立，但如果g_canTxRx当时为空，需要重新连接
+        motionControlTab->setupConnections();
+        qDebug() << "✅ MotionControl已连接CAN状态数据";
+    } else {
+        if (!motionControlTab) {
+            qDebug() << "❌ MotionControl组件为空，无法设置";
+        }
+        if (!g_canTxRx) {
+            qDebug() << "❌ 全局CANTxRx为空，无法设置MotionControl";
         }
     }
 }

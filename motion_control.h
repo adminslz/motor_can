@@ -24,6 +24,7 @@ class MotionControl : public QWidget
 
 public:
     explicit MotionControl(QWidget *parent = nullptr);
+    void setupConnections();
 
 private slots:
     void onControlModeChanged(int mode);
